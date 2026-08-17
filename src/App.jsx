@@ -10,6 +10,16 @@ const API_BASE_URL = (
     : 'https://kole-lookup-console.onrender.com')
 ).replace(/\/+$/, '');
 const MOBILE_TOKEN_KEY = 'kole-connect-mobile-token';
+const MOBILE_UPLOAD_MAX_FILES = 10;
+const MOBILE_UPLOAD_MAX_FILE_SIZE = 20 * 1024 * 1024;
+const MOBILE_UPLOAD_ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.heic', '.heif', '.pdf'];
+const MOBILE_UPLOAD_ALLOWED_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/heif',
+  'application/pdf',
+];
 const isTauriRuntime = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 
 const HOME_STATE_LABELS = {
@@ -78,6 +88,23 @@ async function getMyLoad(token, loadId = '') {
   return data;
 }
 
+async function uploadMobileFiles(token, loadId, uploadType, files) {
+  const formData = new FormData();
+  formData.append('loadId', String(loadId));
+  formData.append('uploadType', uploadType);
+  files.forEach((file) => formData.append('files', file));
+
+  const response = await fetch(`${API_BASE_URL}/mobile/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  return readJson(response, 'Unable to upload these files right now.');
+}
+
 async function openExternalLink(url) {
   if (!url) return;
 
@@ -134,6 +161,38 @@ function formatMobileDate(value) {
     month: 'short',
     day: 'numeric',
   }).format(date);
+}
+
+function formatFileSize(size) {
+  const bytes = Number(size || 0);
+
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getUploadFileValidationError(files) {
+  if (files.length > MOBILE_UPLOAD_MAX_FILES) {
+    return `Select no more than ${MOBILE_UPLOAD_MAX_FILES} files at once.`;
+  }
+
+  const oversizedFile = files.find((file) => file.size > MOBILE_UPLOAD_MAX_FILE_SIZE);
+
+  if (oversizedFile) {
+    return `${oversizedFile.name} is larger than 20 MB.`;
+  }
+
+  const unsupportedFile = files.find((file) => {
+    const extension = String(file.name || '').toLowerCase().match(/\.[a-z0-9]{1,10}$/)?.[0] || '';
+    return !MOBILE_UPLOAD_ALLOWED_TYPES.includes(file.type) &&
+      !MOBILE_UPLOAD_ALLOWED_EXTENSIONS.includes(extension);
+  });
+
+  if (unsupportedFile) {
+    return `${unsupportedFile.name} is not a supported photo or PDF.`;
+  }
+
+  return '';
 }
 
 function formatLoadTime(time, ampm) {
@@ -319,7 +378,7 @@ function LoadActionLink({ href, children }) {
   );
 }
 
-function LoadStopCard({ type, load, sectionRef }) {
+function LoadStopCard({ type, load, sectionRef, onUpload }) {
   const isPickup = type === 'pickup';
   const title = isPickup ? 'PICKUP' : 'DELIVERY';
   const facility = isPickup ? load.Pickup1Name : load.Delivery1Name;
@@ -385,6 +444,14 @@ function LoadStopCard({ type, load, sectionRef }) {
         <LoadActionLink href={getPhoneUrl(contactPhone)}>Call Contact</LoadActionLink>
         <LoadActionLink href={getDirectionsUrl(address.full)}>Directions</LoadActionLink>
       </div>
+
+      <button
+        className="load-upload-action"
+        type="button"
+        onClick={() => onUpload(type)}
+      >
+        Upload {isPickup ? 'Pickup' : 'Delivery'} Photos
+      </button>
     </section>
   );
 }
@@ -418,6 +485,7 @@ function MobileLoadScreen({
   topRef,
   pickupRef,
   deliveryRef,
+  onUpload,
 }) {
   if (isLoading) {
     return (
@@ -486,10 +554,27 @@ function MobileLoadScreen({
           <span aria-hidden="true">→</span>
           <strong>{load.Destination || 'Destination pending'}</strong>
         </div>
+        <button
+          className="load-heading-upload"
+          type="button"
+          onClick={() => onUpload('')}
+        >
+          Upload Photos / Documents
+        </button>
       </section>
 
-      <LoadStopCard type="pickup" load={load} sectionRef={pickupRef} />
-      <LoadStopCard type="delivery" load={load} sectionRef={deliveryRef} />
+      <LoadStopCard
+        type="pickup"
+        load={load}
+        sectionRef={pickupRef}
+        onUpload={onUpload}
+      />
+      <LoadStopCard
+        type="delivery"
+        load={load}
+        sectionRef={deliveryRef}
+        onUpload={onUpload}
+      />
       <LoadDetailSection title="FREIGHT" rows={freightRows} />
       <LoadDetailSection title="LOAD INFORMATION" rows={informationRows} />
     </div>
@@ -559,12 +644,6 @@ function MobileHome({
               <button
                 className="home-primary-action"
                 type="button"
-                disabled={home.primaryAction.type === 'upload_delivery'}
-                title={
-                  home.primaryAction.type === 'upload_delivery'
-                    ? 'Delivery photo upload is coming in a future Mobile pass.'
-                    : undefined
-                }
                 onClick={() => onPrimaryAction(home.primaryAction.type)}
               >
                 {home.primaryAction.label}
@@ -601,6 +680,261 @@ function MobileHome({
   );
 }
 
+function MobileUploadScreen({
+  load,
+  error,
+  isLoading,
+  uploadType,
+  files,
+  isUploading,
+  success,
+  onRetry,
+  onSelectType,
+  onAddFiles,
+  onRemoveFile,
+  onUpload,
+  onDone,
+  onUploadMore,
+}) {
+  const fileInputRef = useRef(null);
+
+  function handleFileSelection(event) {
+    onAddFiles(Array.from(event.target.files || []));
+    event.target.value = '';
+  }
+
+  if (isLoading) {
+    return (
+      <section className="home-message-card" aria-live="polite">
+        <span className="auth-label">UPLOAD</span>
+        <h2>Finding your load</h2>
+        <p>Checking the current assignment and its upload folders.</p>
+      </section>
+    );
+  }
+
+  if (!load) {
+    return (
+      <section
+        className={`home-message-card ${error ? 'home-message-card--error' : 'home-message-card--empty'}`}
+        role={error ? 'alert' : undefined}
+      >
+        <span className="auth-label">UPLOAD</span>
+        <h2>{error ? 'Upload is unavailable.' : 'No working load right now.'}</h2>
+        <p>
+          {error || 'There is no current load available for photos or documents.'}
+        </p>
+        {error ? (
+          <button className="home-retry" type="button" onClick={onRetry}>
+            Try Again
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+
+  if (success) {
+    const uploadedCount = success.uploaded?.length || 0;
+    const destination = success.uploadType === 'pickup' ? 'Pickup Photos' : 'Delivery Photos';
+
+    return (
+      <div className="upload-screen">
+        <section className="upload-heading">
+          <p className="eyebrow">Upload Complete</p>
+          <h1>{uploadedCount} {uploadedCount === 1 ? 'file' : 'files'} uploaded</h1>
+          <p>
+            {uploadedCount === 1 ? 'Your file was' : 'Your files were'} uploaded to {destination} for{' '}
+            {getLoadReference(load)}.
+          </p>
+        </section>
+
+        <section className="upload-success-card" aria-live="polite">
+          <span className="upload-success-icon" aria-hidden="true">✓</span>
+          <h2>Upload complete</h2>
+          <p>Kole Connect may take a moment to update the load status.</p>
+          <div className="upload-success-actions">
+            <button type="button" className="upload-primary-button" onClick={onDone}>
+              Done
+            </button>
+            <button type="button" className="upload-secondary-button" onClick={onUploadMore}>
+              Upload More
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="upload-screen">
+      <section className="upload-heading">
+        <p className="eyebrow">Upload</p>
+        <h1>{getLoadReference(load)}</h1>
+        <div className="load-heading-route">
+          <strong>{load.Origin || 'Origin pending'}</strong>
+          <span aria-hidden="true">→</span>
+          <strong>{load.Destination || 'Destination pending'}</strong>
+        </div>
+      </section>
+
+      <section className="upload-card">
+        <span className="load-section-kicker">DESTINATION</span>
+        <h2>What are you uploading?</h2>
+        <div className="upload-type-options" role="group" aria-label="Upload destination">
+          <button
+            type="button"
+            className={`upload-type-option${uploadType === 'pickup' ? ' is-selected' : ''}`}
+            aria-pressed={uploadType === 'pickup'}
+            disabled={isUploading}
+            onClick={() => onSelectType('pickup')}
+          >
+            <span aria-hidden="true">↑</span>
+            Pickup Photos
+          </button>
+          <button
+            type="button"
+            className={`upload-type-option${uploadType === 'delivery' ? ' is-selected' : ''}`}
+            aria-pressed={uploadType === 'delivery'}
+            disabled={isUploading}
+            onClick={() => onSelectType('delivery')}
+          >
+            <span aria-hidden="true">↓</span>
+            Delivery Photos
+          </button>
+        </div>
+      </section>
+
+      <section className="upload-card">
+        <span className="load-section-kicker">FILES</span>
+        <h2>Photos or documents</h2>
+        <input
+          ref={fileInputRef}
+          className="upload-file-input"
+          type="file"
+          multiple
+          accept="image/*,application/pdf"
+          disabled={isUploading}
+          onChange={handleFileSelection}
+        />
+        <button
+          type="button"
+          className="upload-picker-button"
+          disabled={isUploading}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          Take / Select Photos
+        </button>
+        <p className="upload-help">JPEG, PNG, HEIC/HEIF, or PDF · up to 20 MB each</p>
+
+        {files.length ? (
+          <ul className="upload-file-list">
+            {files.map((file, index) => (
+              <li key={`${file.name}-${file.size}-${file.lastModified}-${index}`}>
+                <div>
+                  <strong>{file.name}</strong>
+                  <small>{formatFileSize(file.size)}</small>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.name}`}
+                  disabled={isUploading}
+                  onClick={() => onRemoveFile(index)}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {error ? <p className="auth-error" role="alert">{error}</p> : null}
+
+        <button
+          type="button"
+          className="upload-submit-button"
+          disabled={!uploadType || !files.length || isUploading}
+          onClick={onUpload}
+        >
+          {isUploading
+            ? 'Uploading…'
+            : `Upload ${files.length || ''} ${files.length === 1 ? 'File' : 'Files'}`.trim()}
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function MobileMe({ driver, error, isLoading, onSignOut }) {
+  const displayName = String(driver?.name || driver?.tmsName || '').trim() || `Truck ${driver.truck}`;
+  const typeDetails = [driver?.driverType, driver?.soloOrTeam].filter(Boolean).join(' · ');
+
+  return (
+    <div className="me-screen">
+      <section className="me-heading">
+        <p className="eyebrow">Me</p>
+        <h1>{displayName}</h1>
+        <p>Truck <strong>{driver.truck}</strong></p>
+      </section>
+
+      <section className="me-card">
+        <span className="load-section-kicker">DRIVER INFORMATION</span>
+        <dl>
+          {driver.cellPhone1 ? (
+            <div>
+              <dt>Phone</dt>
+              <dd>
+                <a
+                  href={getPhoneUrl(driver.cellPhone1)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalLink(getPhoneUrl(driver.cellPhone1));
+                  }}
+                >
+                  {driver.cellPhone1}
+                </a>
+              </dd>
+            </div>
+          ) : null}
+          {driver.emailAddress1 ? (
+            <div>
+              <dt>Email</dt>
+              <dd>
+                <a
+                  href={`mailto:${driver.emailAddress1}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openExternalLink(`mailto:${driver.emailAddress1}`);
+                  }}
+                >
+                  {driver.emailAddress1}
+                </a>
+              </dd>
+            </div>
+          ) : null}
+          {typeDetails ? (
+            <div>
+              <dt>Type</dt>
+              <dd>{typeDetails}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </section>
+
+      <section className="me-card me-session-card">
+        <span className="load-section-kicker">DEVICE / SESSION</span>
+        <p>This device is signed in as Truck <strong>{driver.truck}</strong>.</p>
+        {isLoading ? (
+          <p className="me-session-status" aria-live="polite">Refreshing your profile…</p>
+        ) : null}
+        {error ? <p className="auth-error" role="alert">{error}</p> : null}
+        <button type="button" className="me-sign-out" onClick={onSignOut}>
+          Sign Out
+        </button>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const [truck, setTruck] = useState('');
   const [pin, setPin] = useState('');
@@ -613,12 +947,43 @@ function App() {
   const [isLoadLoading, setIsLoadLoading] = useState(false);
   const [pendingLoadFocus, setPendingLoadFocus] = useState(null);
   const [activeLoadId, setActiveLoadId] = useState('');
+  const [uploadLoad, setUploadLoad] = useState(null);
+  const [uploadType, setUploadType] = useState('');
+  const [uploadFiles, setUploadFiles] = useState([]);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState(null);
+  const [isUploadLoading, setIsUploadLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [meError, setMeError] = useState('');
+  const [isMeLoading, setIsMeLoading] = useState(false);
   const loadTopRef = useRef(null);
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
   const [isLoading, setIsLoading] = useState(() =>
     Boolean(localStorage.getItem(MOBILE_TOKEN_KEY)),
   );
+
+  function clearMobileSession(message = '') {
+    localStorage.removeItem(MOBILE_TOKEN_KEY);
+    setDriver(null);
+    setHome(null);
+    setLoadResponse(null);
+    setLoadError('');
+    setActiveLoadId('');
+    setPendingLoadFocus(null);
+    setUploadLoad(null);
+    setUploadType('');
+    setUploadFiles([]);
+    setUploadError('');
+    setUploadSuccess(null);
+    setIsUploadLoading(false);
+    setIsUploading(false);
+    setMeError('');
+    setIsMeLoading(false);
+    setIsLoading(false);
+    setActiveTab('home');
+    setError(message);
+  }
 
   useEffect(() => {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
@@ -640,7 +1005,6 @@ function App() {
         const hydratedHome = await getMobileHome(token);
 
         if (!cancelled) {
-          setDriver(hydratedHome.driver);
           setHome(hydratedHome);
         }
       } catch (sessionError) {
@@ -650,6 +1014,7 @@ function App() {
           if (!cancelled) {
             setDriver(null);
             setHome(null);
+            setActiveTab('home');
           }
         }
 
@@ -724,17 +1089,17 @@ function App() {
       setDriver(hydratedDriver);
 
       const hydratedHome = await getMobileHome(data.token);
-      setDriver(hydratedHome.driver);
       setHome(hydratedHome);
+      setActiveTab('home');
       setPin('');
     } catch (loginError) {
       if (loginError.status === 401) {
-        localStorage.removeItem(MOBILE_TOKEN_KEY);
-        setDriver(null);
-        setHome(null);
+        clearMobileSession(loginError.message);
       }
 
-      setError(loginError.message);
+      if (loginError.status !== 401) {
+        setError(loginError.message);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -744,8 +1109,7 @@ function App() {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
     if (!token) {
-      setDriver(null);
-      setHome(null);
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
       return;
     }
 
@@ -754,16 +1118,13 @@ function App() {
 
     try {
       const hydratedHome = await getMobileHome(token);
-      setDriver(hydratedHome.driver);
       setHome(hydratedHome);
     } catch (homeError) {
       if (homeError.status === 401) {
-        localStorage.removeItem(MOBILE_TOKEN_KEY);
-        setDriver(null);
-        setHome(null);
+        clearMobileSession(homeError.message);
+      } else {
+        setError(homeError.message);
       }
-
-      setError(homeError.message);
     } finally {
       setIsLoading(false);
     }
@@ -776,33 +1137,177 @@ function App() {
     setPendingLoadFocus(focusSection);
     setActiveLoadId(loadId);
     setLoadError('');
+    setLoadResponse(null);
     setIsLoadLoading(true);
 
     if (!token) {
-      setDriver(null);
-      setHome(null);
-      setActiveTab('home');
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
       setIsLoadLoading(false);
       return;
     }
 
     try {
       const currentLoad = await getMyLoad(token, loadId);
-      setDriver(currentLoad.driver);
       setLoadResponse(currentLoad);
     } catch (currentLoadError) {
       if (currentLoadError.status === 401) {
-        localStorage.removeItem(MOBILE_TOKEN_KEY);
-        setDriver(null);
-        setHome(null);
-        setLoadResponse(null);
-        setActiveTab('home');
+        clearMobileSession(currentLoadError.message);
+      } else {
+        setLoadError(currentLoadError.message);
       }
-
-      setLoadError(currentLoadError.message);
     } finally {
       setIsLoadLoading(false);
     }
+  }
+
+  async function openUploadTab({ load = null, loadId = '', type = '' } = {}) {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+
+    setActiveTab('upload');
+    setPendingLoadFocus(null);
+    setUploadType(type);
+    setUploadFiles([]);
+    setUploadError('');
+    setUploadSuccess(null);
+    setIsUploading(false);
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    if (load) {
+      setUploadLoad(load);
+      setIsUploadLoading(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    setUploadLoad(null);
+    setIsUploadLoading(true);
+
+    try {
+      const targetResponse = await getMyLoad(token, loadId);
+      setUploadLoad(targetResponse.hasLoad ? targetResponse.load : null);
+    } catch (targetError) {
+      if (targetError.status === 401) {
+        clearMobileSession(targetError.message);
+      } else {
+        setUploadError(targetError.message);
+      }
+    } finally {
+      setIsUploadLoading(false);
+    }
+  }
+
+  function handleAddUploadFiles(newFiles) {
+    const combinedFiles = [...uploadFiles, ...newFiles];
+    const validationError = getUploadFileValidationError(combinedFiles);
+
+    if (validationError) {
+      setUploadError(validationError);
+      return;
+    }
+
+    setUploadFiles(combinedFiles);
+    setUploadError('');
+  }
+
+  function handleRemoveUploadFile(index) {
+    setUploadFiles((currentFiles) =>
+      currentFiles.filter((file, fileIndex) => fileIndex !== index),
+    );
+    setUploadError('');
+  }
+
+  async function handleUpload() {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+    const validationError = getUploadFileValidationError(uploadFiles);
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    if (!uploadLoad?.id || !uploadType || !uploadFiles.length) {
+      setUploadError('Choose Pickup or Delivery and select at least one file.');
+      return;
+    }
+
+    if (validationError) {
+      setUploadError(validationError);
+      return;
+    }
+
+    setUploadError('');
+    setIsUploading(true);
+
+    try {
+      const result = await uploadMobileFiles(
+        token,
+        uploadLoad.id,
+        uploadType,
+        uploadFiles,
+      );
+      setUploadFiles([]);
+      setUploadSuccess(result);
+
+      try {
+        const refreshedHome = await getMobileHome(token);
+        setHome(refreshedHome);
+      } catch (refreshError) {
+        if (refreshError.status === 401) {
+          clearMobileSession(refreshError.message);
+        }
+      }
+    } catch (uploadFailure) {
+      if (uploadFailure.status === 401) {
+        clearMobileSession(uploadFailure.message);
+      } else {
+        setUploadError(uploadFailure.message);
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function openMeTab() {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+
+    setActiveTab('me');
+    setPendingLoadFocus(null);
+    setMeError('');
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    setIsMeLoading(true);
+
+    try {
+      const refreshedDriver = await getDriver(token);
+
+      if (localStorage.getItem(MOBILE_TOKEN_KEY) === token) {
+        setDriver(refreshedDriver);
+      }
+    } catch (profileError) {
+      if (profileError.status === 401) {
+        clearMobileSession(profileError.message);
+      } else {
+        setMeError(profileError.message);
+      }
+    } finally {
+      setIsMeLoading(false);
+    }
+  }
+
+  function handleSignOut() {
+    if (!window.confirm(`Sign out of Truck ${driver.truck}?`)) return;
+
+    clearMobileSession('');
+    setTruck('');
+    setPin('');
   }
 
   function handleHomePrimaryAction(actionType) {
@@ -812,6 +1317,8 @@ function App() {
       void openLoadTab('delivery');
     } else if (actionType === 'view_load') {
       void openLoadTab();
+    } else if (actionType === 'upload_delivery' && home?.currentLoad) {
+      void openUploadTab({ load: home.currentLoad, type: 'delivery' });
     }
   }
 
@@ -844,6 +1351,39 @@ function App() {
               topRef={loadTopRef}
               pickupRef={pickupRef}
               deliveryRef={deliveryRef}
+              onUpload={(type) =>
+                void openUploadTab({ load: loadResponse?.load, type })
+              }
+            />
+          ) : activeTab === 'upload' ? (
+            <MobileUploadScreen
+              load={uploadLoad}
+              error={uploadError}
+              isLoading={isUploadLoading}
+              uploadType={uploadType}
+              files={uploadFiles}
+              isUploading={isUploading}
+              success={uploadSuccess}
+              onRetry={() => void openUploadTab()}
+              onSelectType={(type) => {
+                setUploadType(type);
+                setUploadError('');
+              }}
+              onAddFiles={handleAddUploadFiles}
+              onRemoveFile={handleRemoveUploadFile}
+              onUpload={() => void handleUpload()}
+              onDone={openHomeTab}
+              onUploadMore={() => {
+                setUploadSuccess(null);
+                setUploadError('');
+              }}
+            />
+          ) : activeTab === 'me' ? (
+            <MobileMe
+              driver={driver}
+              error={meError}
+              isLoading={isMeLoading}
+              onSignOut={handleSignOut}
             />
           ) : (
             <MobileHome
@@ -948,9 +1488,9 @@ function App() {
 
           <button
             type="button"
-            className="nav-item"
-            disabled
-            title="Upload is coming in a future Mobile pass."
+            className={`nav-item${activeTab === 'upload' ? ' active' : ''}`}
+            aria-current={activeTab === 'upload' ? 'page' : undefined}
+            onClick={() => void openUploadTab()}
           >
             <span className="nav-icon">↑</span>
             <span>Upload</span>
@@ -958,9 +1498,9 @@ function App() {
 
           <button
             type="button"
-            className="nav-item"
-            disabled
-            title="Profile is coming in a future Mobile pass."
+            className={`nav-item${activeTab === 'me' ? ' active' : ''}`}
+            aria-current={activeTab === 'me' ? 'page' : undefined}
+            onClick={() => void openMeTab()}
           >
             <span className="nav-icon">●</span>
             <span>Me</span>
