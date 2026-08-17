@@ -296,7 +296,8 @@
 }
 
 .home-retry:focus-visible,
-.home-primary-action:focus-visible {
+.home-primary-action:focus-visible,
+.home-next-action:focus-visible {
   outline: 3px solid rgba(96, 165, 250, 0.6);
   outline-offset: 2px;
 }
@@ -345,22 +346,6 @@
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.12em;
-}
-
-.home-load-reference {
-  margin: 18px 0 0;
-  color: var(--kole-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.home-customer {
-  margin: 0;
-  color: var(--kole-text-soft);
-  font-size: 15px;
-  font-weight: 700;
 }
 
 .home-load-details {
@@ -465,17 +450,34 @@
   padding: 18px;
 }
 
-.home-next-card .home-load-reference {
-  margin-top: 12px;
-}
-
 .home-next-card h2 {
-  margin-bottom: 14px;
+  margin: 12px 0 14px;
   font-size: 18px;
 }
 
 .home-next-card .home-fact {
   padding: 12px;
+}
+
+.home-next-action {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 14px;
+  padding: 12px 16px;
+
+  border: 1px solid color-mix(in srgb, var(--kole-blue) 72%, var(--kole-border));
+  border-radius: 10px;
+
+  background: color-mix(in srgb, var(--kole-blue) 14%, transparent);
+  color: var(--kole-text);
+
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.home-next-action:hover {
+  background: color-mix(in srgb, var(--kole-blue) 24%, transparent);
 }
 
 .load-screen {
@@ -493,17 +495,8 @@
   outline: none;
 }
 
-.load-bol {
-  margin: 12px 0 5px;
-  color: var(--kole-muted);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
 .load-heading h1 {
-  margin: 0;
+  margin: 12px 0 0;
   font-size: clamp(28px, 8vw, 38px);
   line-height: 1.08;
 }

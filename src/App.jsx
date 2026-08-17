@@ -7,7 +7,7 @@ const MOBILE_TOKEN_KEY = 'kole-connect-mobile-token';
 const isTauriRuntime = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 
 const HOME_STATE_LABELS = {
-  paperwork_needed: 'ACTION NEEDED',
+  delivery_upload_needed: 'ACTION NEEDED',
   delivering_today: 'DELIVERING TODAY',
   in_transit: 'IN TRANSIT',
   pickup_today: 'PICKUP TODAY',
@@ -56,8 +56,9 @@ async function getMobileHome(token) {
   return data;
 }
 
-async function getMyLoad(token) {
-  const response = await fetch(`${API_BASE_URL}/mobile/my-load`, {
+async function getMyLoad(token, loadId = '') {
+  const loadQuery = loadId ? `?loadId=${encodeURIComponent(loadId)}` : '';
+  const response = await fetch(`${API_BASE_URL}/mobile/my-load${loadQuery}`, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -188,11 +189,11 @@ function HomeLoadDetails({ homeState, load }) {
     load.Destination,
   );
 
-  if (homeState === 'paperwork_needed') {
+  if (homeState === 'delivery_upload_needed') {
     return (
       <>
         <p className="home-task-copy">
-          Delivery paperwork is still needed before this load can be closed.
+          Delivery photos are still needed before this load can be closed.
         </p>
         <HomeFact
           label="Delivered"
@@ -257,6 +258,12 @@ function HomeLoadDetails({ homeState, load }) {
 
 function hasLoadValue(value) {
   return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
+function getLoadReference(load, fallback = 'Assigned load') {
+  if (load?.BOL) return `BOL ${load.BOL}`;
+  if (load?.BidID) return `Bid ${load.BidID}`;
+  return fallback;
 }
 
 function getStopAddress(address1, city, state, zip) {
@@ -440,6 +447,7 @@ function MobileLoadScreen({
   }
 
   const load = loadResponse.load;
+  const loadRoleLabel = loadResponse.loadRole === 'next' ? 'NEXT LOAD' : 'CURRENT LOAD';
   const freightRows = [
     { label: 'Freight', value: load.Item1Description || load.Freight },
     { label: 'Quantity', value: load.Item1QTY },
@@ -465,11 +473,8 @@ function MobileLoadScreen({
   return (
     <div className="load-screen">
       <section className="load-heading" ref={topRef} tabIndex="-1">
-        <p className="eyebrow">CURRENT LOAD</p>
-        <p className="load-bol">
-          {load.BOL ? `BOL ${load.BOL}` : load.BidID ? `Bid ${load.BidID}` : 'Assigned load'}
-        </p>
-        <h1>{load.Customer || 'Assigned load'}</h1>
+        <p className="eyebrow">{loadRoleLabel}</p>
+        <h1>{getLoadReference(load)}</h1>
         <div className="load-heading-route">
           <strong>{load.Origin || 'Origin pending'}</strong>
           <span aria-hidden="true">→</span>
@@ -485,7 +490,15 @@ function MobileLoadScreen({
   );
 }
 
-function MobileHome({ driver, home, error, isLoading, onRetry, onPrimaryAction }) {
+function MobileHome({
+  driver,
+  home,
+  error,
+  isLoading,
+  onRetry,
+  onPrimaryAction,
+  onNextLoad,
+}) {
   const identity = home?.driver || driver;
 
   return (
@@ -527,21 +540,7 @@ function MobileHome({ driver, home, error, isLoading, onRetry, onPrimaryAction }
             <span className="home-status-kicker">
               {HOME_STATE_LABELS[home.homeState] || 'CURRENT LOAD'}
             </span>
-            <p className="home-load-reference">
-              {home.currentLoad.BOL
-                ? `BOL ${home.currentLoad.BOL}`
-                : home.currentLoad.BidID
-                  ? `Bid ${home.currentLoad.BidID}`
-                  : 'Assigned load'}
-            </p>
-            <h2>
-              {home.homeState === 'paperwork_needed'
-                ? 'Delivery paperwork is still needed'
-                : home.currentLoad.Customer || 'Assigned load'}
-            </h2>
-            {home.homeState === 'paperwork_needed' && home.currentLoad.Customer ? (
-              <p className="home-customer">{home.currentLoad.Customer}</p>
-            ) : null}
+            <h2>{getLoadReference(home.currentLoad)}</h2>
 
             <div className="home-load-details">
               <HomeLoadDetails
@@ -554,10 +553,10 @@ function MobileHome({ driver, home, error, isLoading, onRetry, onPrimaryAction }
               <button
                 className="home-primary-action"
                 type="button"
-                disabled={home.primaryAction.type === 'upload_paperwork'}
+                disabled={home.primaryAction.type === 'upload_delivery'}
                 title={
-                  home.primaryAction.type === 'upload_paperwork'
-                    ? 'Paperwork upload is coming in a future Mobile pass.'
+                  home.primaryAction.type === 'upload_delivery'
+                    ? 'Delivery photo upload is coming in a future Mobile pass.'
                     : undefined
                 }
                 onClick={() => onPrimaryAction(home.primaryAction.type)}
@@ -570,14 +569,7 @@ function MobileHome({ driver, home, error, isLoading, onRetry, onPrimaryAction }
           {home.nextLoad ? (
             <section className="home-next-card">
               <span className="auth-label">NEXT LOAD</span>
-              <p className="home-load-reference">
-                {home.nextLoad.BOL
-                  ? `BOL ${home.nextLoad.BOL}`
-                  : home.nextLoad.BidID
-                    ? `Bid ${home.nextLoad.BidID}`
-                    : 'Scheduled load'}
-              </p>
-              <h2>{home.nextLoad.Customer || 'Scheduled load'}</h2>
+              <h2>{getLoadReference(home.nextLoad, 'Scheduled load')}</h2>
               <HomeFact
                 label="Pickup"
                 value={formatMobileDate(home.nextLoad.PickupDate)}
@@ -588,6 +580,13 @@ function MobileHome({ driver, home, error, isLoading, onRetry, onPrimaryAction }
                   home.nextLoad.Origin,
                 )}
               />
+              <button
+                className="home-next-action"
+                type="button"
+                onClick={() => onNextLoad(home.nextLoad.id)}
+              >
+                View Next Load
+              </button>
             </section>
           ) : null}
         </>
@@ -607,6 +606,7 @@ function App() {
   const [loadError, setLoadError] = useState('');
   const [isLoadLoading, setIsLoadLoading] = useState(false);
   const [pendingLoadFocus, setPendingLoadFocus] = useState(null);
+  const [activeLoadId, setActiveLoadId] = useState('');
   const loadTopRef = useRef(null);
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
@@ -763,11 +763,12 @@ function App() {
     }
   }
 
-  async function openLoadTab(focusSection = 'top') {
+  async function openLoadTab(focusSection = 'top', loadId = '') {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
     setActiveTab('load');
     setPendingLoadFocus(focusSection);
+    setActiveLoadId(loadId);
     setLoadError('');
     setIsLoadLoading(true);
 
@@ -780,7 +781,7 @@ function App() {
     }
 
     try {
-      const currentLoad = await getMyLoad(token);
+      const currentLoad = await getMyLoad(token, loadId);
       setDriver(currentLoad.driver);
       setLoadResponse(currentLoad);
     } catch (currentLoadError) {
@@ -833,7 +834,7 @@ function App() {
               loadResponse={loadResponse}
               error={loadError}
               isLoading={isLoadLoading}
-              onRetry={() => void openLoadTab()}
+              onRetry={() => void openLoadTab(pendingLoadFocus || 'top', activeLoadId)}
               topRef={loadTopRef}
               pickupRef={pickupRef}
               deliveryRef={deliveryRef}
@@ -846,6 +847,7 @@ function App() {
               isLoading={isLoading}
               onRetry={handleHomeRetry}
               onPrimaryAction={handleHomePrimaryAction}
+              onNextLoad={(loadId) => void openLoadTab('pickup', loadId)}
             />
           )
         ) : (
