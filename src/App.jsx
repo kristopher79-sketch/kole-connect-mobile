@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:5000';
+const configuredApiBase = String(import.meta.env.VITE_KOLE_API_BASE || '').trim();
+const API_BASE_URL = (
+  configuredApiBase ||
+  (import.meta.env.DEV
+    ? 'http://localhost:5000'
+    : 'https://kole-lookup-console.onrender.com')
+).replace(/\/+$/, '');
 const MOBILE_TOKEN_KEY = 'kole-connect-mobile-token';
 const isTauriRuntime = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 
