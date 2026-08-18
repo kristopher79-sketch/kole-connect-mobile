@@ -23,6 +23,7 @@ const MOBILE_UPLOAD_ALLOWED_TYPES = [
 const isTauriRuntime = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 
 const HOME_STATE_LABELS = {
+  pickup_upload_needed: 'ACTION NEEDED',
   delivery_upload_needed: 'ACTION NEEDED',
   delivering_today: 'DELIVERING TODAY',
   in_transit: 'IN TRANSIT',
@@ -254,6 +255,22 @@ function HomeLoadDetails({ homeState, load }) {
     load.Destination,
   );
 
+  if (homeState === 'pickup_upload_needed') {
+    return (
+      <>
+        <p className="home-task-copy">
+          Pickup photos are still needed before this load can advance to delivery.
+        </p>
+        <HomeFact
+          label="Pickup"
+          value={formatMobileDate(load.PickupDate)}
+          secondary={pickupLocation}
+        />
+        <LoadRoute load={load} />
+      </>
+    );
+  }
+
   if (homeState === 'delivery_upload_needed') {
     return (
       <>
@@ -476,6 +493,32 @@ function LoadDetailSection({ title, rows }) {
   );
 }
 
+function MobilePermitCard({ load }) {
+  if (!load?.IsOversized) return null;
+
+  return (
+    <section className="load-section load-permit-card">
+      <span className="load-section-kicker">OVERSIZED SHIPMENT</span>
+      <h2>Permit Documents</h2>
+      <p>Review the permits for this load before travel.</p>
+
+      {load.PermitFolderWebUrl ? (
+        <button
+          className="load-permit-action"
+          type="button"
+          onClick={() => void openExternalLink(load.PermitFolderWebUrl)}
+        >
+          Open Permit Folder
+        </button>
+      ) : (
+        <p className="load-permit-unavailable">
+          The permit folder is not available yet.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function MobileLoadScreen({
   driver,
   loadResponse,
@@ -521,7 +564,11 @@ function MobileLoadScreen({
   }
 
   const load = loadResponse.load;
-  const loadRoleLabel = loadResponse.loadRole === 'next' ? 'NEXT LOAD' : 'CURRENT LOAD';
+  const loadRoleLabel = loadResponse.loadRole === 'next'
+    ? 'NEXT LOAD'
+    : loadResponse.loadRole === 'upcoming'
+      ? 'UPCOMING LOAD'
+      : 'CURRENT LOAD';
   const freightRows = [
     { label: 'Freight', value: load.Item1Description || load.Freight },
     { label: 'Quantity', value: load.Item1QTY },
@@ -575,6 +622,7 @@ function MobileLoadScreen({
         sectionRef={deliveryRef}
         onUpload={onUpload}
       />
+      <MobilePermitCard load={load} />
       <LoadDetailSection title="FREIGHT" rows={freightRows} />
       <LoadDetailSection title="LOAD INFORMATION" rows={informationRows} />
     </div>
@@ -588,9 +636,14 @@ function MobileHome({
   isLoading,
   onRetry,
   onPrimaryAction,
-  onNextLoad,
+  onUpcomingLoad,
 }) {
   const identity = home?.driver || driver;
+  const upcomingLoads = Array.isArray(home?.upcomingLoads)
+    ? home.upcomingLoads
+    : home?.nextLoad
+      ? [home.nextLoad]
+      : [];
 
   return (
     <div className="home-dashboard">
@@ -651,27 +704,41 @@ function MobileHome({
             ) : null}
           </section>
 
-          {home.nextLoad ? (
-            <section className="home-next-card">
-              <span className="auth-label">NEXT LOAD</span>
-              <h2>{getLoadReference(home.nextLoad, 'Scheduled load')}</h2>
-              <HomeFact
-                label="Pickup"
-                value={formatMobileDate(home.nextLoad.PickupDate)}
-                secondary={formatStopLocation(
-                  home.nextLoad.Pickup1Name,
-                  home.nextLoad.Pickup1City,
-                  home.nextLoad.Pickup1State,
-                  home.nextLoad.Origin,
-                )}
-              />
-              <button
-                className="home-next-action"
-                type="button"
-                onClick={() => onNextLoad(home.nextLoad.id)}
-              >
-                View Next Load
-              </button>
+          {upcomingLoads.length ? (
+            <section className="home-upcoming-section">
+              <div className="home-upcoming-heading">
+                <span className="auth-label">UPCOMING LOADS</span>
+                <span>{upcomingLoads.length}</span>
+              </div>
+
+              <div className="home-upcoming-list">
+                {upcomingLoads.map((load, index) => (
+                  <article className="home-next-card" key={load.id || getLoadReference(load)}>
+                    <span className="auth-label">
+                      {index === 0 ? 'NEXT LOAD' : 'UPCOMING LOAD'}
+                    </span>
+                    <h2>{getLoadReference(load, 'Scheduled load')}</h2>
+                    <HomeFact
+                      label="Pickup"
+                      value={formatMobileDate(load.PickupDate)}
+                      secondary={formatStopLocation(
+                        load.Pickup1Name,
+                        load.Pickup1City,
+                        load.Pickup1State,
+                        load.Origin,
+                      )}
+                    />
+                    <LoadRoute load={load} />
+                    <button
+                      className="home-next-action"
+                      type="button"
+                      onClick={() => onUpcomingLoad(load.id)}
+                    >
+                      View Load
+                    </button>
+                  </article>
+                ))}
+              </div>
             </section>
           ) : null}
         </>
@@ -1317,6 +1384,8 @@ function App() {
       void openLoadTab('delivery');
     } else if (actionType === 'view_load') {
       void openLoadTab();
+    } else if (actionType === 'upload_pickup' && home?.currentLoad) {
+      void openUploadTab({ load: home.currentLoad, type: 'pickup' });
     } else if (actionType === 'upload_delivery' && home?.currentLoad) {
       void openUploadTab({ load: home.currentLoad, type: 'delivery' });
     }
@@ -1393,7 +1462,7 @@ function App() {
               isLoading={isLoading}
               onRetry={handleHomeRetry}
               onPrimaryAction={handleHomePrimaryAction}
-              onNextLoad={(loadId) => void openLoadTab('pickup', loadId)}
+              onUpcomingLoad={(loadId) => void openLoadTab('top', loadId)}
             />
           )
         ) : (
