@@ -534,7 +534,7 @@ function MobileLoadScreen({
     return (
       <section className="home-message-card" aria-live="polite">
         <span className="auth-label">CURRENT LOAD</span>
-        <h2>Loading your load</h2>
+        <h2>Loading...</h2>
         <p>Checking the latest operational details for Truck {driver.truck}.</p>
       </section>
     );
