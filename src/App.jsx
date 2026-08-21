@@ -372,10 +372,12 @@ function getDirectionsUrl(address) {
     : '';
 }
 
-function LoadActionLink({ href, children }) {
+function LoadActionLink({ href, className = '', children }) {
+  const linkClassName = `load-action-link${className ? ` ${className}` : ''}`;
+
   if (!href) {
     return (
-      <span className="load-action-link is-disabled" aria-disabled="true">
+      <span className={`${linkClassName} is-disabled`} aria-disabled="true">
         {children}
       </span>
     );
@@ -383,7 +385,7 @@ function LoadActionLink({ href, children }) {
 
   return (
     <a
-      className="load-action-link"
+      className={linkClassName}
       href={href}
       onClick={(event) => {
         event.preventDefault();
@@ -422,6 +424,10 @@ function LoadStopCard({ type, load, sectionRef, onUpload }) {
   const contactPhone = isPickup
     ? load.Pickup1ContactNumber
     : load.Delivery1ContactNumber;
+  const serviceLocation = isPickup
+    ? load.pickupServiceLocation
+    : load.deliveryServiceLocation;
+  const facilityNotes = String(serviceLocation?.facilityNotes || '').trim();
 
   return (
     <section
@@ -457,6 +463,21 @@ function LoadStopCard({ type, load, sectionRef, onUpload }) {
         </div>
       ) : null}
 
+      {facilityNotes ? (
+        <div className="load-location-notes">
+          <span>LOCATION NOTES</span>
+          <p>{facilityNotes}</p>
+          {serviceLocation?.mapLink ? (
+            <LoadActionLink
+              className="load-facility-map-action"
+              href={serviceLocation.mapLink}
+            >
+              View Facility Map
+            </LoadActionLink>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="load-stop-actions">
         <LoadActionLink href={getPhoneUrl(contactPhone)}>Call Contact</LoadActionLink>
         <LoadActionLink href={getDirectionsUrl(address.full)}>Directions</LoadActionLink>
@@ -469,6 +490,18 @@ function LoadStopCard({ type, load, sectionRef, onUpload }) {
       >
         Upload {isPickup ? 'Pickup' : 'Delivery'} Photos
       </button>
+    </section>
+  );
+}
+
+function MobileOrderNotes({ notes }) {
+  const text = String(notes || '').trim();
+  if (!text) return null;
+
+  return (
+    <section className="load-section load-order-notes-card">
+      <span className="load-section-kicker">ORDER NOTES</span>
+      <p>{text}</p>
     </section>
   );
 }
@@ -622,6 +655,7 @@ function MobileLoadScreen({
         sectionRef={deliveryRef}
         onUpload={onUpload}
       />
+      <MobileOrderNotes notes={load.OrderNotes} />
       <MobilePermitCard load={load} />
       <LoadDetailSection title="FREIGHT" rows={freightRows} />
       <LoadDetailSection title="LOAD INFORMATION" rows={informationRows} />
