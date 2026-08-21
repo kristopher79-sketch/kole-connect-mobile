@@ -1168,7 +1168,7 @@
   padding: 8px 8px max(8px, env(safe-area-inset-bottom));
 
   background: rgba(17, 24, 39, 0.96);
-  backdrop-filter: blur(14px);
+  /* iOS WebKit can mispaint backdrop-filtered fixed layers on long pages. */
 
   border-top: 1px solid var(--kole-border);
 }
