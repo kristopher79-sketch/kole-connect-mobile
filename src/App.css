@@ -954,6 +954,7 @@
 .upload-submit-button:focus-visible,
 .upload-primary-button:focus-visible,
 .upload-secondary-button:focus-visible,
+.me-notification-button:focus-visible,
 .me-sign-out:focus-visible {
   outline: 3px solid rgba(96, 165, 250, 0.6);
   outline-offset: 2px;
@@ -1131,6 +1132,67 @@
 
 .me-card a {
   color: #bfdbfe;
+}
+
+.me-notification-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 14px;
+  color: var(--kole-text-soft);
+  font-size: 15px;
+}
+
+.me-notification-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--kole-muted);
+  box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+}
+
+.me-notification-status[data-status='enabled'] .me-notification-dot {
+  background: var(--kole-success);
+  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.12);
+}
+
+.me-notification-status[data-status='denied'] .me-notification-dot,
+.me-notification-status[data-status='error'] .me-notification-dot {
+  background: var(--kole-danger);
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12);
+}
+
+.me-notification-card p {
+  margin: 10px 0 0;
+  color: var(--kole-text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.me-notification-button {
+  width: 100%;
+  min-height: 50px;
+  margin-top: 18px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--kole-blue);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.me-notification-button--secondary {
+  border: 1px solid var(--kole-border);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--kole-text-soft);
+}
+
+.me-notification-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 
 .me-session-card p {

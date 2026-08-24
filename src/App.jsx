@@ -31,6 +31,33 @@ const HOME_STATE_LABELS = {
   upcoming_load: 'NEXT LOAD',
 };
 
+const MOBILE_PUSH_STATUS_COPY = {
+  checking: {
+    label: 'Checking this device',
+    detail: 'Confirming whether notifications are enabled.',
+  },
+  enabled: {
+    label: 'Notifications enabled',
+    detail: 'This device can receive load assignments and important load updates.',
+  },
+  default: {
+    label: 'Notifications are off',
+    detail: 'Enable notifications to receive load assignments and important load updates.',
+  },
+  denied: {
+    label: 'Notifications are blocked',
+    detail: 'Allow notifications for Kole Connect in your browser settings, then return here.',
+  },
+  unsupported: {
+    label: 'Not available on this device',
+    detail: 'Use an installed, supported browser version to receive notifications.',
+  },
+  error: {
+    label: 'Notifications need attention',
+    detail: 'Kole Connect could not update notification settings on this device.',
+  },
+};
+
 async function readJson(response, fallbackMessage) {
   const data = await response.json().catch(() => ({}));
 
@@ -87,6 +114,99 @@ async function getMyLoad(token, loadId = '') {
   }
 
   return data;
+}
+
+function supportsMobilePush() {
+  return Boolean(
+    !isTauriRuntime &&
+    window.isSecureContext &&
+    'serviceWorker' in navigator &&
+    'PushManager' in window &&
+    'Notification' in window,
+  );
+}
+
+function decodeVapidPublicKey(publicKey) {
+  const padding = '='.repeat((4 - (publicKey.length % 4)) % 4);
+  const base64 = `${publicKey}${padding}`.replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(base64);
+
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+function pushSubscriptionUsesKey(subscription, publicKey) {
+  const currentKey = subscription?.options?.applicationServerKey;
+  if (!currentKey) return true;
+
+  const expectedKey = decodeVapidPublicKey(publicKey);
+  const currentBytes = new Uint8Array(currentKey);
+
+  return (
+    currentBytes.length === expectedKey.length &&
+    currentBytes.every((value, index) => value === expectedKey[index])
+  );
+}
+
+async function getMobilePushRegistration() {
+  const current = await navigator.serviceWorker.getRegistration();
+  return current || navigator.serviceWorker.register('/sw.js');
+}
+
+async function getMobilePushPublicKey(token) {
+  const response = await fetch(`${API_BASE_URL}/mobile/push/public-key`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const data = await readJson(response, 'Unable to load notification settings.');
+
+  if (!data.configured || !data.publicKey) {
+    throw new Error('Notifications are not configured right now.');
+  }
+
+  return data.publicKey;
+}
+
+async function registerMobilePushSubscription(token, subscription) {
+  const response = await fetch(`${API_BASE_URL}/mobile/push/subscribe`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ subscription: subscription.toJSON() }),
+  });
+
+  return readJson(response, 'Unable to enable notifications on this device.');
+}
+
+async function deactivateMobilePushSubscription(token, endpoint) {
+  const response = await fetch(`${API_BASE_URL}/mobile/push/unsubscribe`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ endpoint }),
+  });
+
+  return readJson(response, 'Unable to disable notifications on this device.');
+}
+
+async function disconnectMobilePushSubscription(token) {
+  if (!supportsMobilePush()) return false;
+
+  const registration = await navigator.serviceWorker.getRegistration();
+  const subscription = await registration?.pushManager.getSubscription();
+  if (!subscription) return false;
+
+  try {
+    await deactivateMobilePushSubscription(token, subscription.endpoint);
+  } finally {
+    await subscription.unsubscribe();
+  }
+
+  return true;
 }
 
 async function uploadMobileFiles(token, loadId, uploadType, files) {
@@ -965,9 +1085,20 @@ function MobileUploadScreen({
   );
 }
 
-function MobileMe({ driver, error, isLoading, onSignOut }) {
+function MobileMe({
+  driver,
+  error,
+  isLoading,
+  pushStatus,
+  pushMessage,
+  isPushSaving,
+  onEnablePush,
+  onDisablePush,
+  onSignOut,
+}) {
   const displayName = String(driver?.name || driver?.tmsName || '').trim() || `Truck ${driver.truck}`;
   const typeDetails = [driver?.driverType, driver?.soloOrTeam].filter(Boolean).join(' · ');
+  const pushCopy = MOBILE_PUSH_STATUS_COPY[pushStatus] || MOBILE_PUSH_STATUS_COPY.default;
 
   return (
     <div className="me-screen">
@@ -1021,6 +1152,36 @@ function MobileMe({ driver, error, isLoading, onSignOut }) {
         </dl>
       </section>
 
+      <section className="me-card me-notification-card">
+        <span className="load-section-kicker">NOTIFICATIONS</span>
+        <div className="me-notification-status" data-status={pushStatus}>
+          <span className="me-notification-dot" aria-hidden="true" />
+          <strong>{pushCopy.label}</strong>
+        </div>
+        <p>{pushMessage || pushCopy.detail}</p>
+        <div aria-live="polite">
+          {pushStatus === 'enabled' ? (
+            <button
+              type="button"
+              className="me-notification-button me-notification-button--secondary"
+              disabled={isPushSaving}
+              onClick={onDisablePush}
+            >
+              {isPushSaving ? 'Updating…' : 'Disable Notifications'}
+            </button>
+          ) : pushStatus !== 'unsupported' && pushStatus !== 'denied' ? (
+            <button
+              type="button"
+              className="me-notification-button"
+              disabled={isPushSaving || pushStatus === 'checking'}
+              onClick={onEnablePush}
+            >
+              {isPushSaving ? 'Enabling…' : pushStatus === 'error' ? 'Try Again' : 'Enable Notifications'}
+            </button>
+          ) : null}
+        </div>
+      </section>
+
       <section className="me-card me-session-card">
         <span className="load-section-kicker">DEVICE / SESSION</span>
         <p>This device is signed in as Truck <strong>{driver.truck}</strong>.</p>
@@ -1057,9 +1218,15 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [meError, setMeError] = useState('');
   const [isMeLoading, setIsMeLoading] = useState(false);
+  const [pushStatus, setPushStatus] = useState('default');
+  const [pushMessage, setPushMessage] = useState('');
+  const [isPushSaving, setIsPushSaving] = useState(false);
   const loadTopRef = useRef(null);
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
+  const pendingNotificationLoadIdRef = useRef(
+    new URL(window.location.href).searchParams.get('loadId')?.trim() || '',
+  );
   const [isLoading, setIsLoading] = useState(() =>
     Boolean(localStorage.getItem(MOBILE_TOKEN_KEY)),
   );
@@ -1081,6 +1248,9 @@ function App() {
     setIsUploading(false);
     setMeError('');
     setIsMeLoading(false);
+    setPushStatus('default');
+    setPushMessage('');
+    setIsPushSaving(false);
     setIsLoading(false);
     setActiveTab('home');
     setError(message);
@@ -1135,6 +1305,84 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!driver || !pendingNotificationLoadIdRef.current) return;
+
+    const loadId = pendingNotificationLoadIdRef.current;
+    pendingNotificationLoadIdRef.current = '';
+
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('loadId');
+    window.history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    void openLoadTab('top', loadId);
+  }, [driver]);
+
+  useEffect(() => {
+    if (!driver) return undefined;
+
+    if (!supportsMobilePush()) {
+      setPushStatus('unsupported');
+      setPushMessage('');
+      return undefined;
+    }
+
+    if (Notification.permission === 'denied') {
+      setPushStatus('denied');
+      setPushMessage('');
+      return undefined;
+    }
+
+    if (Notification.permission !== 'granted') {
+      setPushStatus('default');
+      setPushMessage('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    setPushStatus('checking');
+    setPushMessage('');
+
+    async function refreshPushRegistration() {
+      const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+      if (!token) return;
+
+      try {
+        const registration = await getMobilePushRegistration();
+        const subscription = await registration.pushManager.getSubscription();
+
+        if (!subscription) {
+          if (!cancelled) setPushStatus('default');
+          return;
+        }
+
+        const publicKey = await getMobilePushPublicKey(token);
+        if (!pushSubscriptionUsesKey(subscription, publicKey)) {
+          if (!cancelled) {
+            setPushStatus('default');
+            setPushMessage('Tap Enable Notifications to refresh this device.');
+          }
+          return;
+        }
+
+        await registerMobilePushSubscription(token, subscription);
+        if (!cancelled) setPushStatus('enabled');
+      } catch (pushError) {
+        if (pushError.status === 401) {
+          if (!cancelled) clearMobileSession(pushError.message);
+        } else if (!cancelled) {
+          setPushStatus('error');
+          setPushMessage(pushError.message);
+        }
+      }
+    }
+
+    void refreshPushRegistration();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [driver]);
 
   useEffect(() => {
     if (
@@ -1403,12 +1651,122 @@ function App() {
     }
   }
 
-  function handleSignOut() {
+  async function handleEnableNotifications() {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    if (!supportsMobilePush()) {
+      setPushStatus('unsupported');
+      setPushMessage('');
+      return;
+    }
+
+    setIsPushSaving(true);
+    setPushMessage('');
+
+    try {
+      const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
+
+      if (permission !== 'granted') {
+        setPushStatus(permission === 'denied' ? 'denied' : 'default');
+        return;
+      }
+
+      const publicKey = await getMobilePushPublicKey(token);
+      const registration = await getMobilePushRegistration();
+      let subscription = await registration.pushManager.getSubscription();
+
+      if (subscription && !pushSubscriptionUsesKey(subscription, publicKey)) {
+        try {
+          await deactivateMobilePushSubscription(token, subscription.endpoint);
+        } catch (deactivationError) {
+          if (deactivationError.status === 401) throw deactivationError;
+        }
+
+        await subscription.unsubscribe();
+        subscription = null;
+      }
+
+      if (subscription) {
+        try {
+          await registerMobilePushSubscription(token, subscription);
+        } catch (registrationError) {
+          if (registrationError.status !== 403) throw registrationError;
+          await subscription.unsubscribe();
+          subscription = null;
+        }
+      }
+
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeVapidPublicKey(publicKey),
+        });
+        await registerMobilePushSubscription(token, subscription);
+      }
+
+      setPushStatus('enabled');
+      setPushMessage('This device is ready for Kole Connect notifications.');
+    } catch (pushError) {
+      if (pushError.status === 401) {
+        clearMobileSession(pushError.message);
+      } else {
+        setPushStatus(Notification.permission === 'denied' ? 'denied' : 'error');
+        setPushMessage(pushError.message || 'Unable to enable notifications on this device.');
+      }
+    } finally {
+      setIsPushSaving(false);
+    }
+  }
+
+  async function handleDisableNotifications() {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    setIsPushSaving(true);
+    setPushMessage('');
+
+    try {
+      await disconnectMobilePushSubscription(token);
+      setPushStatus('default');
+      setPushMessage('Notifications are off on this device.');
+    } catch (pushError) {
+      if (pushError.status === 401) {
+        clearMobileSession(pushError.message);
+      } else {
+        setPushStatus('default');
+        setPushMessage('Notifications are off in this browser. Server cleanup will finish automatically.');
+      }
+    } finally {
+      setIsPushSaving(false);
+    }
+  }
+
+  async function handleSignOut() {
     if (!window.confirm(`Sign out of Truck ${driver.truck}?`)) return;
 
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
     clearMobileSession('');
     setTruck('');
     setPin('');
+
+    if (token) {
+      try {
+        await disconnectMobilePushSubscription(token);
+      } catch {
+        // The local subscription is still removed by the cleanup helper.
+      }
+    }
   }
 
   function handleHomePrimaryAction(actionType) {
@@ -1486,7 +1844,12 @@ function App() {
               driver={driver}
               error={meError}
               isLoading={isMeLoading}
-              onSignOut={handleSignOut}
+              pushStatus={pushStatus}
+              pushMessage={pushMessage}
+              isPushSaving={isPushSaving}
+              onEnablePush={() => void handleEnableNotifications()}
+              onDisablePush={() => void handleDisableNotifications()}
+              onSignOut={() => void handleSignOut()}
             />
           ) : (
             <MobileHome

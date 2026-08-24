@@ -1,0 +1,19 @@
+{
+  "name": "Kole Connect Mobile",
+  "short_name": "Kole Mobile",
+  "description": "Kole Connect load and trip information for drivers.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
