@@ -1,3 +1,11 @@
+self.addEventListener('install', (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('push', (event) => {
   let payload = {};
 
@@ -13,18 +21,30 @@ self.addEventListener('push', (event) => {
   const body = String(payload.body || '').trim() || 'Open Kole Connect to view the latest load update.';
   const tagParts = [payload.eventType, loadId || payload.bidId].filter(Boolean);
 
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
-      tag: tagParts.join('-') || undefined,
-      data: {
-        ...payload,
-        url: targetUrl,
-      },
-    }),
-  );
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({
+      type: 'window',
+      includeUncontrolled: true,
+    });
+
+    await Promise.all([
+      self.registration.showNotification(title, {
+        body,
+        icon: '/favicon.svg',
+        badge: '/favicon.svg',
+        tag: tagParts.join('-') || undefined,
+        data: {
+          ...payload,
+          url: targetUrl,
+        },
+      }),
+      ...windows.map((client) => client.postMessage({
+        type: 'KOLE_MOBILE_PUSH_RECEIVED',
+        eventType: String(payload.eventType || '').trim(),
+        loadId,
+      })),
+    ]);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {

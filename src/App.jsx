@@ -1307,6 +1307,60 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!driver || !('serviceWorker' in navigator)) return undefined;
+
+    let cancelled = false;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+
+    async function refreshHomeAfterPush() {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+
+      refreshInFlight = true;
+
+      do {
+        refreshQueued = false;
+        const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+        if (!token) break;
+
+        try {
+          const refreshedHome = await getMobileHome(token);
+
+          if (!cancelled && localStorage.getItem(MOBILE_TOKEN_KEY) === token) {
+            setHome(refreshedHome);
+            setError('');
+          }
+        } catch (refreshError) {
+          if (cancelled) break;
+
+          if (refreshError.status === 401) {
+            clearMobileSession(refreshError.message);
+          } else {
+            setError('A new load update arrived, but Home could not refresh. Please try again.');
+          }
+        }
+      } while (refreshQueued && !cancelled);
+
+      refreshInFlight = false;
+    }
+
+    function handleServiceWorkerMessage(event) {
+      if (event.data?.type !== 'KOLE_MOBILE_PUSH_RECEIVED') return;
+      void refreshHomeAfterPush();
+    }
+
+    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+
+    return () => {
+      cancelled = true;
+      navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+    };
+  }, [driver]);
+
+  useEffect(() => {
     if (!driver || !pendingNotificationLoadIdRef.current) return;
 
     const loadId = pendingNotificationLoadIdRef.current;
