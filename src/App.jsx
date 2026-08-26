@@ -209,11 +209,11 @@ async function disconnectMobilePushSubscription(token) {
   return true;
 }
 
-async function uploadMobileFiles(token, loadId, uploadType, files) {
+async function uploadMobileFile(token, loadId, uploadType, file) {
   const formData = new FormData();
   formData.append('loadId', String(loadId));
   formData.append('uploadType', uploadType);
-  files.forEach((file) => formData.append('files', file));
+  formData.append('files', file);
 
   const response = await fetch(`${API_BASE_URL}/mobile/upload`, {
     method: 'POST',
@@ -224,6 +224,29 @@ async function uploadMobileFiles(token, loadId, uploadType, files) {
   });
 
   return readJson(response, 'Unable to upload these files right now.');
+}
+
+async function uploadMobileFiles(token, loadId, uploadType, files) {
+  const uploaded = [];
+  let latestResult = null;
+
+  for (let index = 0; index < files.length; index += 1) {
+    try {
+      latestResult = await uploadMobileFile(token, loadId, uploadType, files[index]);
+      uploaded.push(...(latestResult.uploaded || []));
+    } catch (error) {
+      error.uploaded = uploaded;
+      error.remainingFiles = files.slice(index);
+      throw error;
+    }
+  }
+
+  return {
+    ...latestResult,
+    success: true,
+    uploadType: latestResult?.uploadType || uploadType,
+    uploaded,
+  };
 }
 
 async function openExternalLink(url) {
@@ -1667,7 +1690,23 @@ function App() {
       if (uploadFailure.status === 401) {
         clearMobileSession(uploadFailure.message);
       } else {
-        setUploadError(uploadFailure.message);
+        const uploadedCount = uploadFailure.uploaded?.length || 0;
+        const remainingFiles = uploadFailure.remainingFiles || uploadFiles;
+
+        if (uploadedCount > 0) {
+          const uploadedLabel = uploadedCount === 1 ? 'file was' : 'files were';
+          const remainingCount = remainingFiles.length;
+          const remainingLabel = remainingCount === 1 ? 'file still needs' : 'files still need';
+
+          setUploadFiles(remainingFiles);
+          setUploadError(
+            `${uploadedCount} ${uploadedLabel} uploaded. ` +
+            `${remainingCount} ${remainingLabel} to be uploaded. ` +
+            `${uploadFailure.message} Tap Upload again to retry only the remaining ${remainingCount === 1 ? 'file' : 'files'}.`,
+          );
+        } else {
+          setUploadError(uploadFailure.message);
+        }
       }
     } finally {
       setIsUploading(false);
