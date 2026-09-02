@@ -7,6 +7,7 @@
     "dev": "concurrently --kill-others-on-fail --names mobile,server --prefix-colors cyan,yellow \"vite --strictPort\" \"npm --prefix ../kole-lookup-console start\"",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node test/mobile-stop-events.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
+import {
+  captureMobileStopLocation,
+  formatMobileStopEventTime,
+  getMobileStopEventState,
+} from './mobile-stop-events';
 
 const configuredApiBase = String(import.meta.env.VITE_KOLE_API_BASE || '').trim();
 const API_BASE_URL = (
@@ -127,6 +132,19 @@ async function getMyLoad(token, loadId = '') {
   }
 
   return data;
+}
+
+async function recordMobileStopEvent(token, input) {
+  const response = await fetch(`${API_BASE_URL}/mobile/stop-event`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  });
+
+  return readJson(response, 'Unable to record this stop event right now.');
 }
 
 function supportsMobilePush() {
@@ -553,7 +571,100 @@ function LoadActionLink({ href, className = '', children }) {
   );
 }
 
-function LoadStopCard({ type, load, sectionRef, onUpload }) {
+function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) {
+  if (!isEnabled) return null;
+
+  const isPickup = type === 'pickup';
+  const stopLabel = isPickup ? 'PICKUP' : 'DELIVERY';
+  const stopState = getMobileStopEventState(load.stopEvents, type, 1);
+  const stopEventsAvailable = load.stopEventsAvailable === true;
+  const phase = operation?.phase || '';
+  const action = operation?.action || stopState.nextAction;
+  const isBusy = Boolean(phase);
+  const isRefreshRequired = operation?.refreshRequired === true;
+  const progressMessage = phase === 'getting-location'
+    ? 'Getting current location…'
+    : phase === 'recording'
+      ? `Recording check-${action === 'out' ? 'out' : 'in'}…`
+      : phase === 'refreshing'
+        ? 'Refreshing stop status…'
+        : '';
+
+  if (!stopEventsAvailable) {
+    return (
+      <div className="load-stop-event load-stop-event--unavailable" role="status">
+        <p>{load.stopEventsError || 'Check-in is temporarily unavailable.'}</p>
+      </div>
+    );
+  }
+
+  if (stopState.complete) {
+    return (
+      <div className="load-stop-event load-stop-event--complete" aria-live="polite">
+        <strong>{stopLabel} COMPLETE</strong>
+        <dl>
+          <div>
+            <dt>Arrived</dt>
+            <dd>{formatMobileStopEventTime(stopState.arrivedEvent.time)}</dd>
+          </div>
+          <div>
+            <dt>Departed</dt>
+            <dd>{formatMobileStopEventTime(stopState.departedEvent.time)}</dd>
+          </div>
+        </dl>
+      </div>
+    );
+  }
+
+  if (!stopState.nextAction) {
+    return (
+      <div className="load-stop-event load-stop-event--unavailable" role="status">
+        <p>Check-in status needs to be refreshed before another action.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="load-stop-event">
+      {stopState.arrivedEvent ? (
+        <div className="load-stop-event-arrival" aria-live="polite">
+          <span>ARRIVED</span>
+          <strong>{formatMobileStopEventTime(stopState.arrivedEvent.time)}</strong>
+        </div>
+      ) : null}
+
+      <button
+        className="load-stop-event-action"
+        type="button"
+        disabled={isBusy || isRefreshRequired}
+        onClick={() => onRecord(type, stopState.nextAction)}
+      >
+        {`${stopState.nextAction === 'out' ? 'CHECK OUT OF' : 'CHECK IN AT'} ${stopLabel}`}
+      </button>
+
+      {progressMessage ? (
+        <p className="load-stop-event-progress" aria-live="polite">
+          {progressMessage}
+        </p>
+      ) : null}
+      {operation?.error ? (
+        <p className="load-stop-event-error" role="alert">
+          {operation.error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function LoadStopCard({
+  type,
+  load,
+  sectionRef,
+  onUpload,
+  stopEventsEnabled,
+  stopEventOperation,
+  onStopEvent,
+}) {
   const isPickup = type === 'pickup';
   const title = isPickup ? 'PICKUP' : 'DELIVERY';
   const facility = isPickup ? load.Pickup1Name : load.Delivery1Name;
@@ -639,6 +750,14 @@ function LoadStopCard({ type, load, sectionRef, onUpload }) {
         <LoadActionLink href={getDirectionsUrl(address.full)}>Directions</LoadActionLink>
       </div>
 
+      <MobileStopEventControl
+        type={type}
+        load={load}
+        isEnabled={stopEventsEnabled}
+        operation={stopEventOperation}
+        onRecord={onStopEvent}
+      />
+
       <button
         className="load-upload-action"
         type="button"
@@ -718,6 +837,8 @@ function MobileLoadScreen({
   pickupRef,
   deliveryRef,
   onUpload,
+  stopEventOperations = {},
+  onStopEvent,
 }) {
   if (isLoading) {
     return (
@@ -758,6 +879,7 @@ function MobileLoadScreen({
     : loadResponse.loadRole === 'upcoming'
       ? 'UPCOMING LOAD'
       : 'CURRENT LOAD';
+  const stopEventsEnabled = loadResponse.loadRole === 'current';
   const freightRows = [
     { label: 'Freight', value: load.Item1Description || load.Freight },
     { label: 'Quantity', value: load.Item1QTY },
@@ -804,12 +926,18 @@ function MobileLoadScreen({
         load={load}
         sectionRef={pickupRef}
         onUpload={onUpload}
+        stopEventsEnabled={stopEventsEnabled}
+        stopEventOperation={stopEventOperations.pickup}
+        onStopEvent={onStopEvent}
       />
       <LoadStopCard
         type="delivery"
         load={load}
         sectionRef={deliveryRef}
         onUpload={onUpload}
+        stopEventsEnabled={stopEventsEnabled}
+        stopEventOperation={stopEventOperations.delivery}
+        onStopEvent={onStopEvent}
       />
       <MobileOrderNotes notes={load.OrderNotes} />
       <MobilePermitCard load={load} />
@@ -1277,6 +1405,7 @@ function App() {
   const [isLoadLoading, setIsLoadLoading] = useState(false);
   const [pendingLoadFocus, setPendingLoadFocus] = useState(null);
   const [activeLoadId, setActiveLoadId] = useState('');
+  const [stopEventOperations, setStopEventOperations] = useState({});
   const [uploadLoad, setUploadLoad] = useState(null);
   const [uploadType, setUploadType] = useState('');
   const [uploadFiles, setUploadFiles] = useState([]);
@@ -1293,6 +1422,7 @@ function App() {
   const loadTopRef = useRef(null);
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
+  const stopEventRequestsRef = useRef(new Set());
   const pendingNotificationLoadIdRef = useRef(
     new URL(window.location.href).searchParams.get('loadId')?.trim() || '',
   );
@@ -1325,6 +1455,8 @@ function App() {
     setLoadError('');
     setActiveLoadId('');
     setPendingLoadFocus(null);
+    setStopEventOperations({});
+    stopEventRequestsRef.current.clear();
     setUploadLoad(null);
     setUploadType('');
     setUploadFiles([]);
@@ -1627,6 +1759,7 @@ function App() {
     setActiveLoadId(loadId);
     setLoadError('');
     setLoadResponse(null);
+    setStopEventOperations({});
     setIsLoadLoading(true);
 
     if (!token) {
@@ -1646,6 +1779,109 @@ function App() {
       }
     } finally {
       setIsLoadLoading(false);
+    }
+  }
+
+  async function handleStopEvent(stop, action) {
+    const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+    const load = loadResponse?.load;
+    const stopKey = String(stop || '').toLowerCase();
+    const actionKey = String(action || '').toLowerCase();
+
+    if (!token) {
+      clearMobileSession('Your Mobile session has ended. Please sign in again.');
+      return;
+    }
+
+    if (
+      loadResponse?.loadRole !== 'current' ||
+      load?.stopEventsAvailable !== true ||
+      !load?.id ||
+      !['pickup', 'delivery'].includes(stopKey) ||
+      !['in', 'out'].includes(actionKey)
+    ) {
+      return;
+    }
+
+    const requestKey = `${load.id}|${stopKey}`;
+    if (stopEventRequestsRef.current.has(requestKey)) return;
+
+    stopEventRequestsRef.current.add(requestKey);
+    setStopEventOperations((current) => ({
+      ...current,
+      [stopKey]: {
+        action: actionKey,
+        phase: 'getting-location',
+        error: '',
+        refreshRequired: false,
+      },
+    }));
+
+    let eventRecorded = false;
+
+    try {
+      const location = await captureMobileStopLocation();
+
+      setStopEventOperations((current) => ({
+        ...current,
+        [stopKey]: {
+          action: actionKey,
+          phase: 'recording',
+          error: '',
+          refreshRequired: false,
+        },
+      }));
+
+      await recordMobileStopEvent(token, {
+        loadId: String(load.id),
+        stop: stopKey,
+        stopSequence: 1,
+        action: actionKey,
+        location,
+      });
+      eventRecorded = true;
+
+      setStopEventOperations((current) => ({
+        ...current,
+        [stopKey]: {
+          action: actionKey,
+          phase: 'refreshing',
+          error: '',
+          refreshRequired: false,
+        },
+      }));
+
+      const refreshedLoad = await getMyLoad(token, String(load.id));
+      if (localStorage.getItem(MOBILE_TOKEN_KEY) !== token) return;
+
+      setLoadResponse((current) => (
+        String(current?.load?.id || '') === String(load.id)
+          ? refreshedLoad
+          : current
+      ));
+      setStopEventOperations((current) => {
+        const next = { ...current };
+        delete next[stopKey];
+        return next;
+      });
+    } catch (stopEventError) {
+      if (stopEventError.status === 401) {
+        clearMobileSession(stopEventError.message);
+      } else {
+        setStopEventOperations((current) => ({
+          ...current,
+          [stopKey]: {
+            action: actionKey,
+            phase: '',
+            error: eventRecorded
+              ? 'The stop event was recorded, but its latest status could not be refreshed. Reopen this load before recording another event.'
+              : stopEventError.message,
+            refreshRequired: eventRecorded,
+          },
+        }));
+      }
+    } finally {
+      stopEventRequestsRef.current.delete(requestKey);
     }
   }
 
@@ -1971,6 +2207,8 @@ function App() {
               onUpload={(type) =>
                 void openUploadTab({ load: loadResponse?.load, type })
               }
+              stopEventOperations={stopEventOperations}
+              onStopEvent={(stop, action) => void handleStopEvent(stop, action)}
             />
           ) : activeTab === 'upload' ? (
             <MobileUploadScreen
