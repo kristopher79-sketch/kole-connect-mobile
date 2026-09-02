@@ -1,11 +1,13 @@
 html {
-  background: #0f172a;
+  background: var(--kole-bg, #0f172a);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--kole-bg, #0f172a);
+  color: var(--kole-text, #f8fafc);
 
   font-family:
     "Segoe UI",

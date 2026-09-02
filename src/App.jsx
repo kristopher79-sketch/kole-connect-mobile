@@ -10,6 +10,11 @@ const API_BASE_URL = (
     : 'https://kole-lookup-console.onrender.com')
 ).replace(/\/+$/, '');
 const MOBILE_TOKEN_KEY = 'kole-connect-mobile-token';
+const MOBILE_THEME_KEY = 'kole-connect-mobile-theme';
+const MOBILE_THEME_COLORS = {
+  dark: '#0f172a',
+  light: '#f5efe3',
+};
 const MOBILE_UPLOAD_MAX_FILES = 10;
 const MOBILE_UPLOAD_MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MOBILE_UPLOAD_ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.heic', '.heif', '.pdf'];
@@ -21,6 +26,14 @@ const MOBILE_UPLOAD_ALLOWED_TYPES = [
   'application/pdf',
 ];
 const isTauriRuntime = Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+
+function getSavedMobileTheme() {
+  try {
+    return localStorage.getItem(MOBILE_THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
 
 const HOME_STATE_LABELS = {
   pickup_upload_needed: 'ACTION NEEDED',
@@ -1112,11 +1125,13 @@ function MobileMe({
   driver,
   error,
   isLoading,
+  colorTheme,
   pushStatus,
   pushMessage,
   isPushSaving,
   onEnablePush,
   onDisablePush,
+  onThemeChange,
   onSignOut,
 }) {
   const displayName = String(driver?.name || driver?.tmsName || '').trim() || `Truck ${driver.truck}`;
@@ -1205,6 +1220,36 @@ function MobileMe({
         </div>
       </section>
 
+      <section className="me-card me-preferences-card">
+        <span className="load-section-kicker">PREFERENCES</span>
+        <div className="me-preference-option">
+          <div className="me-preference-copy">
+            <strong>Appearance</strong>
+            <span>Choose the classic dark view or a warm cream light mode.</span>
+          </div>
+          <div className="me-theme-options" role="group" aria-label="Appearance theme">
+            <button
+              type="button"
+              className={colorTheme === 'dark' ? 'is-selected' : ''}
+              aria-pressed={colorTheme === 'dark'}
+              onClick={() => onThemeChange('dark')}
+            >
+              <span aria-hidden="true">☾</span>
+              Dark
+            </button>
+            <button
+              type="button"
+              className={colorTheme === 'light' ? 'is-selected' : ''}
+              aria-pressed={colorTheme === 'light'}
+              onClick={() => onThemeChange('light')}
+            >
+              <span aria-hidden="true">☀</span>
+              Light
+            </button>
+          </div>
+        </div>
+      </section>
+
       <section className="me-card me-session-card">
         <span className="load-section-kicker">DEVICE / SESSION</span>
         <p>This device is signed in as Truck <strong>{driver.truck}</strong>.</p>
@@ -1244,6 +1289,7 @@ function App() {
   const [pushStatus, setPushStatus] = useState('default');
   const [pushMessage, setPushMessage] = useState('');
   const [isPushSaving, setIsPushSaving] = useState(false);
+  const [colorTheme, setColorTheme] = useState(getSavedMobileTheme);
   const loadTopRef = useRef(null);
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
@@ -1253,6 +1299,23 @@ function App() {
   const [isLoading, setIsLoading] = useState(() =>
     Boolean(localStorage.getItem(MOBILE_TOKEN_KEY)),
   );
+
+  useEffect(() => {
+    const normalizedTheme = colorTheme === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = normalizedTheme;
+    document.body.dataset.theme = normalizedTheme;
+
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    themeColor?.setAttribute('content', MOBILE_THEME_COLORS[normalizedTheme]);
+    const statusBarStyle = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    statusBarStyle?.setAttribute('content', normalizedTheme === 'light' ? 'default' : 'black-translucent');
+
+    try {
+      localStorage.setItem(MOBILE_THEME_KEY, normalizedTheme);
+    } catch {
+      // The current selection still applies when device storage is unavailable.
+    }
+  }, [colorTheme]);
 
   function clearMobileSession(message = '') {
     localStorage.removeItem(MOBILE_TOKEN_KEY);
@@ -1937,11 +2000,13 @@ function App() {
               driver={driver}
               error={meError}
               isLoading={isMeLoading}
+              colorTheme={colorTheme}
               pushStatus={pushStatus}
               pushMessage={pushMessage}
               isPushSaving={isPushSaving}
               onEnablePush={() => void handleEnableNotifications()}
               onDisablePush={() => void handleDisableNotifications()}
+              onThemeChange={setColorTheme}
               onSignOut={() => void handleSignOut()}
             />
           ) : (
