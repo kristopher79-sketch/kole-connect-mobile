@@ -6,6 +6,12 @@ import {
   formatMobileStopEventTime,
   getMobileStopEventState,
 } from './mobile-stop-events';
+import {
+  createMobilePaperworkObjectUrl,
+  getMobileLoadPaperwork,
+  getMobilePaperworkPdf,
+  printMobilePaperworkFrame,
+} from './mobile-paperwork';
 
 const configuredApiBase = String(import.meta.env.VITE_KOLE_API_BASE || '').trim();
 const API_BASE_URL = (
@@ -827,6 +833,194 @@ function MobilePermitCard({ load }) {
   );
 }
 
+function MobilePaperworkCard({
+  documents,
+  error,
+  isLoading,
+  onOpen,
+  onRetry,
+}) {
+  return (
+    <section className="load-section load-paperwork-card" aria-labelledby="paperwork-title">
+      <span className="load-section-kicker" id="paperwork-title">PAPERWORK</span>
+
+      {isLoading ? (
+        <p className="load-paperwork-status" aria-live="polite">
+          Loading paperwork…
+        </p>
+      ) : error ? (
+        <div className="load-paperwork-error" role="alert">
+          <p>Paperwork could not be loaded.</p>
+          <button type="button" onClick={onRetry}>Try Again</button>
+        </div>
+      ) : documents.length ? (
+        <div className="load-paperwork-list">
+          {documents.map((document) => (
+            <button
+              className="load-paperwork-row"
+              type="button"
+              key={document.id}
+              onClick={() => onOpen(document)}
+            >
+              <span>{document.name}</span>
+              <strong>VIEW</strong>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="load-paperwork-status">
+          No paperwork has been added for this load.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function MobilePaperworkViewer({
+  document: paperworkDocument,
+  loadId,
+  onClose,
+  onLoadUnavailable,
+  onSessionExpired,
+  token,
+}) {
+  const [viewerUrl, setViewerUrl] = useState('');
+  const [viewerError, setViewerError] = useState('');
+  const [printError, setPrintError] = useState('');
+  const [isFrameReady, setIsFrameReady] = useState(false);
+  const closeButtonRef = useRef(null);
+  const frameRef = useRef(null);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') onClose();
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrlLease = null;
+    let cancelled = false;
+
+    async function loadPdf() {
+      try {
+        const blob = await getMobilePaperworkPdf({
+          apiBaseUrl: API_BASE_URL,
+          token,
+          loadId,
+          documentId: paperworkDocument.id,
+          signal: controller.signal,
+        });
+
+        if (cancelled) return;
+        objectUrlLease = createMobilePaperworkObjectUrl(blob);
+        setViewerUrl(objectUrlLease.viewerUrl);
+      } catch (error) {
+        if (cancelled || error.name === 'AbortError') return;
+
+        if (error.status === 401) {
+          onSessionExpired(error.message);
+          return;
+        }
+        if (error.code === 'MOBILE_PAPERWORK_LOAD_NOT_AVAILABLE') {
+          onLoadUnavailable(error.message);
+          return;
+        }
+
+        setViewerError(
+          error.status === 404
+            ? 'This paperwork is no longer available.'
+            : 'This paperwork could not be opened.',
+        );
+      }
+    }
+
+    void loadPdf();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      objectUrlLease?.revoke();
+    };
+  }, [loadId, onLoadUnavailable, onSessionExpired, paperworkDocument.id, token]);
+
+  function handlePrint() {
+    const frameWindow = frameRef.current?.contentWindow;
+
+    if (!isFrameReady) {
+      setPrintError('Printing is not available on this device right now.');
+      return;
+    }
+
+    try {
+      setPrintError('');
+      if (!printMobilePaperworkFrame(frameWindow)) {
+        setPrintError('Printing is not available on this device right now.');
+      }
+    } catch {
+      setPrintError('Printing is not available on this device right now.');
+    }
+  }
+
+  return (
+    <section
+      className="paperwork-viewer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="paperwork-viewer-title"
+    >
+      <header className="paperwork-viewer-header">
+        <div>
+          <span>PAPERWORK</span>
+          <h1 id="paperwork-viewer-title">{paperworkDocument.name}</h1>
+        </div>
+        <button ref={closeButtonRef} type="button" onClick={onClose}>Close</button>
+      </header>
+
+      <div className="paperwork-viewer-body">
+        {viewerError ? (
+          <div className="paperwork-viewer-message" role="alert">
+            <p>{viewerError}</p>
+          </div>
+        ) : viewerUrl ? (
+          <iframe
+            ref={frameRef}
+            src={viewerUrl}
+            title={paperworkDocument.name}
+            onLoad={() => setIsFrameReady(true)}
+          />
+        ) : (
+          <div className="paperwork-viewer-message" aria-live="polite">
+            <p>Loading paperwork…</p>
+          </div>
+        )}
+      </div>
+
+      <footer className="paperwork-viewer-footer">
+        {printError ? <p role="alert">{printError}</p> : null}
+        <button
+          type="button"
+          disabled={!viewerUrl || Boolean(viewerError)}
+          onClick={handlePrint}
+        >
+          Print
+        </button>
+      </footer>
+    </section>
+  );
+}
+
 function MobileLoadScreen({
   driver,
   loadResponse,
@@ -837,6 +1031,11 @@ function MobileLoadScreen({
   pickupRef,
   deliveryRef,
   onUpload,
+  paperworkDocuments = [],
+  paperworkError,
+  isPaperworkLoading,
+  onOpenPaperwork,
+  onRetryPaperwork,
   stopEventOperations = {},
   onStopEvent,
 }) {
@@ -938,6 +1137,13 @@ function MobileLoadScreen({
         stopEventsEnabled={stopEventsEnabled}
         stopEventOperation={stopEventOperations.delivery}
         onStopEvent={onStopEvent}
+      />
+      <MobilePaperworkCard
+        documents={paperworkDocuments}
+        error={paperworkError}
+        isLoading={isPaperworkLoading}
+        onOpen={onOpenPaperwork}
+        onRetry={onRetryPaperwork}
       />
       <MobileOrderNotes notes={load.OrderNotes} />
       <MobilePermitCard load={load} />
@@ -1406,6 +1612,10 @@ function App() {
   const [pendingLoadFocus, setPendingLoadFocus] = useState(null);
   const [activeLoadId, setActiveLoadId] = useState('');
   const [stopEventOperations, setStopEventOperations] = useState({});
+  const [paperworkDocuments, setPaperworkDocuments] = useState([]);
+  const [paperworkError, setPaperworkError] = useState('');
+  const [isPaperworkLoading, setIsPaperworkLoading] = useState(false);
+  const [activePaperworkDocument, setActivePaperworkDocument] = useState(null);
   const [uploadLoad, setUploadLoad] = useState(null);
   const [uploadType, setUploadType] = useState('');
   const [uploadFiles, setUploadFiles] = useState([]);
@@ -1423,6 +1633,7 @@ function App() {
   const pickupRef = useRef(null);
   const deliveryRef = useRef(null);
   const stopEventRequestsRef = useRef(new Set());
+  const paperworkRequestRef = useRef(null);
   const pendingNotificationLoadIdRef = useRef(
     new URL(window.location.href).searchParams.get('loadId')?.trim() || '',
   );
@@ -1447,6 +1658,10 @@ function App() {
     }
   }, [colorTheme]);
 
+  useEffect(() => () => {
+    paperworkRequestRef.current?.abort();
+  }, []);
+
   function clearMobileSession(message = '') {
     localStorage.removeItem(MOBILE_TOKEN_KEY);
     setDriver(null);
@@ -1457,6 +1672,12 @@ function App() {
     setPendingLoadFocus(null);
     setStopEventOperations({});
     stopEventRequestsRef.current.clear();
+    paperworkRequestRef.current?.abort();
+    paperworkRequestRef.current = null;
+    setPaperworkDocuments([]);
+    setPaperworkError('');
+    setIsPaperworkLoading(false);
+    setActivePaperworkDocument(null);
     setUploadLoad(null);
     setUploadType('');
     setUploadFiles([]);
@@ -1751,6 +1972,48 @@ function App() {
     }
   }
 
+  async function loadPaperworkForLoad(token, loadId) {
+    paperworkRequestRef.current?.abort();
+    const controller = new AbortController();
+    paperworkRequestRef.current = controller;
+    setPaperworkDocuments([]);
+    setPaperworkError('');
+    setIsPaperworkLoading(true);
+
+    try {
+      const documents = await getMobileLoadPaperwork({
+        apiBaseUrl: API_BASE_URL,
+        token,
+        loadId,
+        signal: controller.signal,
+      });
+
+      if (paperworkRequestRef.current !== controller) return;
+      setPaperworkDocuments(documents);
+    } catch (paperworkFailure) {
+      if (
+        paperworkFailure.name === 'AbortError' ||
+        paperworkRequestRef.current !== controller
+      ) {
+        return;
+      }
+
+      if (paperworkFailure.status === 401) {
+        clearMobileSession(paperworkFailure.message);
+      } else if (paperworkFailure.code === 'MOBILE_PAPERWORK_LOAD_NOT_AVAILABLE') {
+        setLoadError(paperworkFailure.message);
+        setLoadResponse(null);
+      } else {
+        setPaperworkError('Paperwork could not be loaded.');
+      }
+    } finally {
+      if (paperworkRequestRef.current === controller) {
+        paperworkRequestRef.current = null;
+        setIsPaperworkLoading(false);
+      }
+    }
+  }
+
   async function openLoadTab(focusSection = 'top', loadId = '') {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
@@ -1760,6 +2023,12 @@ function App() {
     setLoadError('');
     setLoadResponse(null);
     setStopEventOperations({});
+    paperworkRequestRef.current?.abort();
+    paperworkRequestRef.current = null;
+    setPaperworkDocuments([]);
+    setPaperworkError('');
+    setIsPaperworkLoading(false);
+    setActivePaperworkDocument(null);
     setIsLoadLoading(true);
 
     if (!token) {
@@ -1771,6 +2040,9 @@ function App() {
     try {
       const currentLoad = await getMyLoad(token, loadId);
       setLoadResponse(currentLoad);
+      if (currentLoad.hasLoad && currentLoad.load?.id) {
+        void loadPaperworkForLoad(token, String(currentLoad.load.id));
+      }
     } catch (currentLoadError) {
       if (currentLoadError.status === 401) {
         clearMobileSession(currentLoadError.message);
@@ -1888,6 +2160,10 @@ function App() {
   async function openUploadTab({ load = null, loadId = '', type = '' } = {}) {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
+    paperworkRequestRef.current?.abort();
+    paperworkRequestRef.current = null;
+    setIsPaperworkLoading(false);
+    setActivePaperworkDocument(null);
     setActiveTab('upload');
     setPendingLoadFocus(null);
     setUploadType(type);
@@ -2015,6 +2291,10 @@ function App() {
   async function openMeTab() {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
+    paperworkRequestRef.current?.abort();
+    paperworkRequestRef.current = null;
+    setIsPaperworkLoading(false);
+    setActivePaperworkDocument(null);
     setActiveTab('me');
     setPendingLoadFocus(null);
     setMeError('');
@@ -2175,7 +2455,25 @@ function App() {
     }
   }
 
+  function handlePaperworkLoadUnavailable(message) {
+    setActivePaperworkDocument(null);
+    setPaperworkDocuments([]);
+    setPaperworkError('');
+    setIsPaperworkLoading(false);
+    setLoadError(message || 'That load is not available for this Mobile session.');
+    setLoadResponse(null);
+  }
+
+  function handlePaperworkSessionExpired(message) {
+    setActivePaperworkDocument(null);
+    clearMobileSession(message || 'Your Mobile session has ended. Please sign in again.');
+  }
+
   function openHomeTab() {
+    paperworkRequestRef.current?.abort();
+    paperworkRequestRef.current = null;
+    setIsPaperworkLoading(false);
+    setActivePaperworkDocument(null);
     setActiveTab('home');
     setPendingLoadFocus(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2207,6 +2505,20 @@ function App() {
               onUpload={(type) =>
                 void openUploadTab({ load: loadResponse?.load, type })
               }
+              paperworkDocuments={paperworkDocuments}
+              paperworkError={paperworkError}
+              isPaperworkLoading={isPaperworkLoading}
+              onOpenPaperwork={setActivePaperworkDocument}
+              onRetryPaperwork={() => {
+                const token = localStorage.getItem(MOBILE_TOKEN_KEY);
+                const loadId = String(loadResponse?.load?.id || '');
+
+                if (!token) {
+                  clearMobileSession('Your Mobile session has ended. Please sign in again.');
+                } else if (loadId) {
+                  void loadPaperworkForLoad(token, loadId);
+                }
+              }}
               stopEventOperations={stopEventOperations}
               onStopEvent={(stop, action) => void handleStopEvent(stop, action)}
             />
@@ -2368,6 +2680,17 @@ function App() {
             <span>Me</span>
           </button>
         </nav>
+      ) : null}
+
+      {driver && activePaperworkDocument && loadResponse?.load?.id ? (
+        <MobilePaperworkViewer
+          document={activePaperworkDocument}
+          loadId={String(loadResponse.load.id)}
+          token={localStorage.getItem(MOBILE_TOKEN_KEY) || ''}
+          onClose={() => setActivePaperworkDocument(null)}
+          onLoadUnavailable={handlePaperworkLoadUnavailable}
+          onSessionExpired={handlePaperworkSessionExpired}
+        />
       ) : null}
     </div>
   );

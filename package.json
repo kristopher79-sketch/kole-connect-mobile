@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "test": "node test/mobile-stop-events.test.js",
+    "test:paperwork": "node test/mobile-paperwork.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
