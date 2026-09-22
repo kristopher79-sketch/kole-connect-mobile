@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
+import { getMobileProximityPrompt, hasSeenProximityPrompt, rememberProximityPrompt } from './mobile-proximity';
 import {
   captureMobileStopLocation,
   formatMobileStopEventTime,
@@ -1635,6 +1636,33 @@ function MobileMe({
   );
 }
 
+function MobileProximityPrompt({ notice, onOpen }) {
+  const [dismissed, setDismissed] = useState(() => hasSeenProximityPrompt(notice.id));
+
+  useEffect(() => {
+    rememberProximityPrompt(notice.id);
+  }, [notice.id]);
+
+  if (dismissed) return null;
+
+  return (
+    <section className="me-card" style={{ overflowWrap: 'anywhere' }} aria-label="Arrival reminder" aria-live="polite">
+      <p>Looks like you've arrived at {notice.stopName}.</p>
+      <p>{notice.focus === 'top' ? 'Open your load to review this stop.' : 'Check in now?'}</p>
+      <button className="me-notification-button" type="button" onClick={() => {
+        setDismissed(true);
+        onOpen(notice.focus, notice.loadId);
+      }}>
+        {notice.focus === 'top' ? 'View load' : 'Open check-in'}
+      </button>
+      <button className="me-notification-button me-notification-button--secondary" type="button"
+        onClick={() => setDismissed(true)}>
+        Not now
+      </button>
+    </section>
+  );
+}
+
 function App() {
   const [truck, setTruck] = useState('');
   const [pin, setPin] = useState('');
@@ -2512,6 +2540,8 @@ function App() {
     clearMobileSession(message || 'Your Mobile session has ended. Please sign in again.');
   }
 
+  const proximityNotice = getMobileProximityPrompt(driver, home);
+
   function openHomeTab() {
     paperworkRequestRef.current?.abort();
     paperworkRequestRef.current = null;
@@ -2534,6 +2564,10 @@ function App() {
       </header>
 
       <main className="mobile-content">
+        {proximityNotice ? (
+          <MobileProximityPrompt key={proximityNotice.id} notice={proximityNotice}
+            onOpen={(focus, loadId) => void openLoadTab(focus, loadId)} />
+        ) : null}
         {driver ? (
           activeTab === 'load' ? (
             <MobileLoadScreen
