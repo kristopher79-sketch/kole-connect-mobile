@@ -578,6 +578,21 @@ function LoadActionLink({ href, className = '', children }) {
 }
 
 function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) {
+  const [currentTime, setCurrentTime] = useState(Date.now());
+  const checkInAvailableAt = type === 'pickup'
+    ? load.pickupCheckInAvailableAt
+    : load.deliveryCheckInAvailableAt;
+  const openingTime = Date.parse(checkInAvailableAt || '');
+
+  useEffect(() => {
+    if (!isEnabled || !Number.isFinite(openingTime) || currentTime >= openingTime) return undefined;
+    const timer = window.setTimeout(
+      () => setCurrentTime(Date.now()),
+      Math.min(Math.max(openingTime - Date.now(), 1), 60000),
+    );
+    return () => window.clearTimeout(timer);
+  }, [isEnabled, openingTime, currentTime]);
+
   if (!isEnabled) return null;
 
   const isPickup = type === 'pickup';
@@ -588,6 +603,12 @@ function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) 
   const action = operation?.action || stopState.nextAction;
   const isBusy = Boolean(phase);
   const isRefreshRequired = operation?.refreshRequired === true;
+  const isCheckInUnavailable = stopState.nextAction === 'in' &&
+    (!Number.isFinite(openingTime) || currentTime < openingTime);
+  const appointmentTime = isPickup
+    ? formatLoadTime(load.PickupTime, load.PickupAMPM)
+    : formatLoadTime(load.DeliveryTime, load.DeliveryAMPM);
+  const appointmentDate = isPickup ? load.PickupDate : load.DeliveryDate;
   const progressMessage = phase === 'getting-location'
     ? 'Getting current location…'
     : phase === 'recording'
@@ -642,11 +663,26 @@ function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) 
       <button
         className="load-stop-event-action"
         type="button"
-        disabled={isBusy || isRefreshRequired}
+        disabled={isBusy || isRefreshRequired || isCheckInUnavailable}
         onClick={() => onRecord(type, stopState.nextAction)}
       >
         {`${stopState.nextAction === 'out' ? 'CHECK OUT OF' : 'CHECK IN AT'} ${stopLabel}`}
       </button>
+
+      {isCheckInUnavailable ? (
+        <p className="load-stop-event-progress" role="status">
+          Check-in unavailable.<br />
+          {Number.isFinite(openingTime)
+            ? <>
+              Scheduled appointment: {formatMobileDate(appointmentDate)} at {appointmentTime}.<br />
+              {`Check-in available beginning ${new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/New_York',
+                month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+              }).format(openingTime)} Eastern.`}
+            </>
+            : 'A valid scheduled appointment date and time are required.'}
+        </p>
+      ) : null}
 
       {progressMessage ? (
         <p className="load-stop-event-progress" aria-live="polite">
@@ -2073,6 +2109,13 @@ function App() {
       !['in', 'out'].includes(actionKey)
     ) {
       return;
+    }
+
+    if (actionKey === 'in') {
+      const openingTime = Date.parse(
+        (stopKey === 'pickup' ? load.pickupCheckInAvailableAt : load.deliveryCheckInAvailableAt) || '',
+      );
+      if (!Number.isFinite(openingTime) || Date.now() < openingTime) return;
     }
 
     const requestKey = `${load.id}|${stopKey}`;
