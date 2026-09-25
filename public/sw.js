@@ -30,8 +30,8 @@ self.addEventListener('push', (event) => {
     await Promise.all([
       self.registration.showNotification(title, {
         body,
-        icon: '/favicon.svg',
-        badge: '/favicon.svg',
+        icon: '/icons/kole-192.png',
+        badge: '/icons/kole-192.png',
         tag: tagParts.join('-') || undefined,
         data: {
           ...payload,

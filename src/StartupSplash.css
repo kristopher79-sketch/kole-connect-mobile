@@ -1,0 +1,161 @@
+.startup-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse at 50% 40%, var(--kole-page-glow), transparent 65%),
+    var(--kole-bg);
+  color: var(--kole-text);
+  opacity: 1;
+  transition: opacity 300ms ease;
+}
+
+.startup-splash--leaving { opacity: 0; }
+
+.startup-splash__content {
+  width: min(100%, 340px);
+  text-align: center;
+}
+
+.startup-splash__emblem {
+  position: relative;
+  isolation: isolate;
+  width: min(60vw, 230px);
+  margin: 0 auto 28px;
+  animation: startup-splash-reveal 650ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.startup-splash__emblem::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -18px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 15%, var(--kole-gold) 35%, transparent 55%, var(--kole-blue) 80%, transparent);
+  filter: blur(22px);
+  opacity: 0.35;
+  animation: startup-splash-orbit 5s linear infinite;
+}
+
+.startup-splash__emblem::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  background: linear-gradient(115deg, transparent 35%, color-mix(in srgb, var(--kole-button-text) 45%, transparent) 50%, transparent 65%);
+  background-size: 300% 100%;
+  animation: startup-splash-sheen 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.startup-splash__logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 24px;
+  box-shadow: 0 16px 48px var(--kole-hero-shadow);
+}
+
+.startup-splash__name {
+  margin: 0;
+  font-size: clamp(1.2rem, 5vw, 1.5rem);
+  font-weight: 700;
+  animation: startup-splash-reveal 500ms 150ms ease-out both;
+}
+
+.startup-splash__tagline {
+  margin: 10px 0 0;
+  color: var(--kole-gold);
+  font-size: 1rem;
+  animation: startup-splash-reveal 500ms 300ms ease-out both;
+}
+
+.startup-splash__route {
+  position: relative;
+  width: min(100%, 210px);
+  height: 3px;
+  margin: 28px auto 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--kole-border);
+  animation: startup-splash-reveal 400ms 400ms ease-out both;
+}
+
+.startup-splash__route span {
+  display: block;
+  width: 45%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--kole-gold), transparent);
+  animation: startup-splash-travel 1.4s ease-in-out infinite;
+}
+
+.startup-splash__status {
+  margin: 16px 0 0;
+  color: var(--kole-text-soft);
+  font-size: 0.875rem;
+  animation: startup-splash-reveal 400ms 450ms ease-out both;
+}
+
+.startup-splash__slow {
+  margin-top: 20px;
+  color: var(--kole-text-soft);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.startup-splash__slow button {
+  min-height: 44px;
+  padding: 10px 20px;
+  border: 1px solid var(--kole-gold-soft-border);
+  border-radius: 12px;
+  background: var(--kole-gold-soft-bg);
+  color: var(--kole-gold-soft-text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.startup-splash__slow button:hover { background: var(--kole-gold-soft-hover); }
+.startup-splash__slow button:focus-visible {
+  outline: 3px solid var(--kole-gold-focus-ring);
+  outline-offset: 3px;
+}
+.startup-splash__slow button:disabled { cursor: default; opacity: 0.6; }
+
+@keyframes startup-splash-reveal {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes startup-splash-orbit {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes startup-splash-sheen {
+  0%, 15% { background-position: 100% 0; opacity: 0; }
+  35% { opacity: 1; }
+  65%, 100% { background-position: 0% 0; opacity: 0; }
+}
+
+@keyframes startup-splash-travel {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(330%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-splash { transition: none; }
+  .startup-splash__emblem,
+  .startup-splash__emblem::before,
+  .startup-splash__emblem::after,
+  .startup-splash__name,
+  .startup-splash__tagline,
+  .startup-splash__route,
+  .startup-splash__route span,
+  .startup-splash__status { animation: none; }
+  .startup-splash__emblem::after { display: none; }
+  .startup-splash__route span { margin: auto; }
+}

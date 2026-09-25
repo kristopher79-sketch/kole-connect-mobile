@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
+import StartupSplash from './StartupSplash';
 import { getMobileProximityPrompt, hasSeenProximityPrompt, rememberProximityPrompt } from './mobile-proximity';
 import {
   captureMobileStopLocation,
@@ -1664,6 +1665,7 @@ function MobileProximityPrompt({ notice, onOpen }) {
 }
 
 function App() {
+  const [isStartupVisible, setIsStartupVisible] = useState(true);
   const [truck, setTruck] = useState('');
   const [pin, setPin] = useState('');
   const [driver, setDriver] = useState(null);
@@ -2553,7 +2555,11 @@ function App() {
   }
 
   return (
-    <div className="mobile-app">
+    <>
+      {isStartupVisible && (
+        <StartupSplash isLoading={isLoading} onComplete={setIsStartupVisible} />
+      )}
+    <div className="mobile-app" inert={isStartupVisible} aria-hidden={isStartupVisible || undefined}>
       <header className="mobile-header">
         <div className="brand">
           <span className="brand-kole">KOLE</span>
@@ -2770,6 +2776,7 @@ function App() {
         />
       ) : null}
     </div>
+    </>
   );
 }
 
