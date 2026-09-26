@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
 import StartupSplash from './StartupSplash';
@@ -583,6 +583,9 @@ function LoadActionLink({ href, className = '', children }) {
 
 function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) {
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const earlyArrivalDialogRef = useRef(null);
+  const earlyArrivalTitleId = useId();
+  const earlyArrivalDescriptionId = useId();
   const checkInAvailableAt = type === 'pickup'
     ? load.pickupCheckInAvailableAt
     : load.deliveryCheckInAvailableAt;
@@ -691,12 +694,42 @@ function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) 
               className="load-stop-event-early-arrival"
               type="button"
               disabled={isBusy || isRefreshRequired}
-              onClick={() => onRecord(type, 'in', true)}
+              onClick={() => earlyArrivalDialogRef.current?.showModal()}
             >
               Arrived early? Check in
             </button>
           ) : null}
         </p>
+      ) : null}
+
+      {canOverride ? (
+        <dialog
+          ref={earlyArrivalDialogRef}
+          className="load-stop-event-confirmation"
+          aria-labelledby={earlyArrivalTitleId}
+          aria-describedby={earlyArrivalDescriptionId}
+        >
+          <h2 id={earlyArrivalTitleId}>Check in early?</h2>
+          <p id={earlyArrivalDescriptionId}>
+            Check-ins outside of scheduled times do not guarantee detention time.
+          </p>
+          <div className="load-stop-event-confirmation-actions">
+            <button type="button" autoFocus onClick={() => earlyArrivalDialogRef.current?.close()}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="load-stop-event-action"
+              disabled={isBusy || isRefreshRequired}
+              onClick={() => {
+                earlyArrivalDialogRef.current?.close();
+                onRecord(type, 'in', true);
+              }}
+            >
+              Check in early
+            </button>
+          </div>
+        </dialog>
       ) : null}
 
       {progressMessage ? (
@@ -2187,9 +2220,6 @@ function App() {
 
     const requestKey = `${load.id}|${stopKey}`;
     if (stopEventRequestsRef.current.has(requestKey)) return;
-    if (earlyArrival && !window.confirm(
-      'Check-ins outside of scheduled times do not guarantee detention time.\n\nContinue with early check-in?',
-    )) return;
 
     stopEventRequestsRef.current.add(requestKey);
     setStopEventOperations((current) => ({
