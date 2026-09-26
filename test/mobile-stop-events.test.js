@@ -6,7 +6,23 @@ import {
   captureMobileStopLocation,
   getMobileLocationFailureStatus,
   getMobileStopEventState,
+  getMobileCheckInGate,
 } from '../src/mobile-stop-events.js';
+
+test('early override appears only for check-in before a valid opening time', () => {
+  const opening = '2026-09-26T14:00:00.000Z';
+  const now = Date.parse(opening);
+  assert.deepEqual(getMobileCheckInGate('in', opening, now - 1), { unavailable: true, canOverride: true });
+  for (const time of [now, now + 1]) {
+    assert.deepEqual(getMobileCheckInGate('in', opening, time), { unavailable: false, canOverride: false });
+  }
+  for (const appointment of ['', 'invalid']) {
+    assert.deepEqual(getMobileCheckInGate('in', appointment, now), { unavailable: true, canOverride: false });
+  }
+  for (const nextAction of ['out', null]) {
+    assert.deepEqual(getMobileCheckInGate(nextAction, opening, now - 1), { unavailable: false, canOverride: false });
+  }
+});
 
 test('stop state advances from In to Out to complete', () => {
   const noEvents = getMobileStopEventState([], 'pickup', 1);

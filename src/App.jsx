@@ -8,6 +8,7 @@ import {
   captureMobileStopLocation,
   formatMobileStopEventTime,
   getMobileStopEventState,
+  getMobileCheckInGate,
 } from './mobile-stop-events';
 import {
   createMobilePaperworkObjectUrl,
@@ -606,8 +607,9 @@ function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) 
   const action = operation?.action || stopState.nextAction;
   const isBusy = Boolean(phase);
   const isRefreshRequired = operation?.refreshRequired === true;
-  const isCheckInUnavailable = stopState.nextAction === 'in' &&
-    (!Number.isFinite(openingTime) || currentTime < openingTime);
+  const { unavailable: isCheckInUnavailable, canOverride } = getMobileCheckInGate(
+    stopState.nextAction, checkInAvailableAt, currentTime,
+  );
   const appointmentTime = isPickup
     ? formatLoadTime(load.PickupTime, load.PickupAMPM)
     : formatLoadTime(load.DeliveryTime, load.DeliveryAMPM);
@@ -684,6 +686,16 @@ function MobileStopEventControl({ type, load, isEnabled, operation, onRecord }) 
               }).format(openingTime)} Eastern.`}
             </>
             : 'A valid scheduled appointment date and time are required.'}
+          {canOverride ? (
+            <button
+              className="load-stop-event-early-arrival"
+              type="button"
+              disabled={isBusy || isRefreshRequired}
+              onClick={() => onRecord(type, 'in', true)}
+            >
+              Arrived early? Check in
+            </button>
+          ) : null}
         </p>
       ) : null}
 
@@ -2145,7 +2157,7 @@ function App() {
     }
   }
 
-  async function handleStopEvent(stop, action) {
+  async function handleStopEvent(stop, action, earlyArrival = false) {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
     const load = loadResponse?.load;
     const stopKey = String(stop || '').toLowerCase();
@@ -2170,11 +2182,14 @@ function App() {
       const openingTime = Date.parse(
         (stopKey === 'pickup' ? load.pickupCheckInAvailableAt : load.deliveryCheckInAvailableAt) || '',
       );
-      if (!Number.isFinite(openingTime) || Date.now() < openingTime) return;
+      if (!Number.isFinite(openingTime) || (Date.now() < openingTime && !earlyArrival)) return;
     }
 
     const requestKey = `${load.id}|${stopKey}`;
     if (stopEventRequestsRef.current.has(requestKey)) return;
+    if (earlyArrival && !window.confirm(
+      'Check-ins outside of scheduled times do not guarantee detention time.\n\nContinue with early check-in?',
+    )) return;
 
     stopEventRequestsRef.current.add(requestKey);
     setStopEventOperations((current) => ({
@@ -2209,6 +2224,7 @@ function App() {
         stopSequence: 1,
         action: actionKey,
         location,
+        earlyArrival: actionKey === 'in' && earlyArrival === true,
       });
       eventRecorded = true;
 

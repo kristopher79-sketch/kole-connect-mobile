@@ -8,6 +8,15 @@ function normalizeStopEventValue(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+export function getMobileCheckInGate(nextAction, availableAt, now = Date.now()) {
+  const openingTime = Date.parse(availableAt || '');
+  const canOverride = nextAction === 'in' && Number.isFinite(openingTime) && now < openingTime;
+  return {
+    unavailable: nextAction === 'in' && (!Number.isFinite(openingTime) || now < openingTime),
+    canOverride,
+  };
+}
+
 function getFirstStopEvent(events, action) {
   const normalizedAction = normalizeStopEventValue(action);
 

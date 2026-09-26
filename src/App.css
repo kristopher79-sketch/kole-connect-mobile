@@ -930,6 +930,33 @@
   color: var(--kole-danger-text);
 }
 
+.load-stop-event-early-arrival {
+  display: block;
+  min-height: 44px;
+  margin-top: 4px;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--kole-text);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.load-stop-event-early-arrival:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.load-stop-event-early-arrival:focus-visible {
+  outline: 2px solid var(--kole-text);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
 .load-heading-upload,
 .load-upload-action {
   width: 100%;
