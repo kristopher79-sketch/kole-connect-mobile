@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import './App.css';
 import StartupSplash from './StartupSplash';
+import { createCurrentLoadCache } from './mobile-load-cache';
 import { getMobileProximityPrompt, hasSeenProximityPrompt, rememberProximityPrompt } from './mobile-proximity';
 import {
   captureMobileStopLocation,
@@ -1700,6 +1701,9 @@ function App() {
   const deliveryRef = useRef(null);
   const stopEventRequestsRef = useRef(new Set());
   const paperworkRequestRef = useRef(null);
+  const currentLoadCacheRef = useRef(null);
+  if (!currentLoadCacheRef.current) currentLoadCacheRef.current = createCurrentLoadCache(getMyLoad);
+  const loadRequestRef = useRef(0);
   const pendingNotificationLoadIdRef = useRef(
     new URL(window.location.href).searchParams.get('loadId')?.trim() || '',
   );
@@ -1730,6 +1734,8 @@ function App() {
 
   function clearMobileSession(message = '') {
     localStorage.removeItem(MOBILE_TOKEN_KEY);
+    currentLoadCacheRef.current.clear();
+    loadRequestRef.current += 1;
     setDriver(null);
     setHome(null);
     setLoadResponse(null);
@@ -1781,7 +1787,7 @@ function App() {
         const hydratedHome = await getMobileHome(token);
 
         if (!cancelled) {
-          setHome(hydratedHome);
+          await preloadHomeLoad(token, hydratedHome);
         }
       } catch (sessionError) {
         if (sessionError.status === 401) {
@@ -1835,7 +1841,7 @@ function App() {
           const refreshedHome = await getMobileHome(token);
 
           if (!cancelled && localStorage.getItem(MOBILE_TOKEN_KEY) === token) {
-            setHome(refreshedHome);
+            await preloadHomeLoad(token, refreshedHome);
             setError('');
           }
         } catch (refreshError) {
@@ -1997,7 +2003,7 @@ function App() {
       setDriver(hydratedDriver);
 
       const hydratedHome = await getMobileHome(data.token);
-      setHome(hydratedHome);
+      await preloadHomeLoad(data.token, hydratedHome);
       setActiveTab('home');
       setPin('');
     } catch (loginError) {
@@ -2026,7 +2032,7 @@ function App() {
 
     try {
       const hydratedHome = await getMobileHome(token);
-      setHome(hydratedHome);
+      await preloadHomeLoad(token, hydratedHome);
     } catch (homeError) {
       if (homeError.status === 401) {
         clearMobileSession(homeError.message);
@@ -2035,6 +2041,20 @@ function App() {
       }
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function preloadHomeLoad(token, hydratedHome) {
+    if (localStorage.getItem(MOBILE_TOKEN_KEY) !== token) return;
+    currentLoadCacheRef.current.clear(token, hydratedHome.currentLoad?.id);
+    setHome(hydratedHome);
+    try {
+      await currentLoadCacheRef.current.get(token);
+    } catch (preloadError) {
+      // Home remains usable; opening Load retries a failed preload.
+      if (preloadError.status === 401 && localStorage.getItem(MOBILE_TOKEN_KEY) === token) {
+        clearMobileSession(preloadError.message);
+      }
     }
   }
 
@@ -2067,6 +2087,7 @@ function App() {
       if (paperworkFailure.status === 401) {
         clearMobileSession(paperworkFailure.message);
       } else if (paperworkFailure.code === 'MOBILE_PAPERWORK_LOAD_NOT_AVAILABLE') {
+        currentLoadCacheRef.current.clear();
         setLoadError(paperworkFailure.message);
         setLoadResponse(null);
       } else {
@@ -2083,11 +2104,13 @@ function App() {
   async function openLoadTab(focusSection = 'top', loadId = '') {
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
+    const requestId = ++loadRequestRef.current;
+    const cachedLoad = currentLoadCacheRef.current.peek(token, loadId);
     setActiveTab('load');
     setPendingLoadFocus(focusSection);
     setActiveLoadId(loadId);
     setLoadError('');
-    setLoadResponse(null);
+    setLoadResponse(cachedLoad);
     setStopEventOperations({});
     paperworkRequestRef.current?.abort();
     paperworkRequestRef.current = null;
@@ -2095,7 +2118,7 @@ function App() {
     setPaperworkError('');
     setIsPaperworkLoading(false);
     setActivePaperworkDocument(null);
-    setIsLoadLoading(true);
+    setIsLoadLoading(!cachedLoad);
 
     if (!token) {
       clearMobileSession('Your Mobile session has ended. Please sign in again.');
@@ -2104,19 +2127,21 @@ function App() {
     }
 
     try {
-      const currentLoad = await getMyLoad(token, loadId);
+      const currentLoad = await currentLoadCacheRef.current.get(token, loadId);
+      if (requestId !== loadRequestRef.current || localStorage.getItem(MOBILE_TOKEN_KEY) !== token) return;
       setLoadResponse(currentLoad);
       if (currentLoad.hasLoad && currentLoad.load?.id) {
         void loadPaperworkForLoad(token, String(currentLoad.load.id));
       }
     } catch (currentLoadError) {
+      if (requestId !== loadRequestRef.current || localStorage.getItem(MOBILE_TOKEN_KEY) !== token) return;
       if (currentLoadError.status === 401) {
         clearMobileSession(currentLoadError.message);
       } else {
         setLoadError(currentLoadError.message);
       }
     } finally {
-      setIsLoadLoading(false);
+      if (requestId === loadRequestRef.current) setIsLoadLoading(false);
     }
   }
 
@@ -2177,6 +2202,7 @@ function App() {
         },
       }));
 
+      currentLoadCacheRef.current.clear();
       await recordMobileStopEvent(token, {
         loadId: String(load.id),
         stop: stopKey,
@@ -2199,6 +2225,8 @@ function App() {
       const refreshedLoad = await getMyLoad(token, String(load.id));
       if (localStorage.getItem(MOBILE_TOKEN_KEY) !== token) return;
 
+      currentLoadCacheRef.current.clear();
+      currentLoadCacheRef.current.store(token, refreshedLoad);
       setLoadResponse((current) => (
         String(current?.load?.id || '') === String(load.id)
           ? refreshedLoad
@@ -2231,6 +2259,7 @@ function App() {
   }
 
   async function openUploadTab({ load = null, loadId = '', type = '' } = {}) {
+    loadRequestRef.current += 1;
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
     paperworkRequestRef.current?.abort();
@@ -2328,7 +2357,7 @@ function App() {
 
       try {
         const refreshedHome = await getMobileHome(token);
-        setHome(refreshedHome);
+        await preloadHomeLoad(token, refreshedHome);
       } catch (refreshError) {
         if (refreshError.status === 401) {
           clearMobileSession(refreshError.message);
@@ -2362,6 +2391,7 @@ function App() {
   }
 
   async function openMeTab() {
+    loadRequestRef.current += 1;
     const token = localStorage.getItem(MOBILE_TOKEN_KEY);
 
     paperworkRequestRef.current?.abort();
@@ -2529,6 +2559,8 @@ function App() {
   }
 
   function handlePaperworkLoadUnavailable(message) {
+    currentLoadCacheRef.current.clear();
+    loadRequestRef.current += 1;
     setActivePaperworkDocument(null);
     setPaperworkDocuments([]);
     setPaperworkError('');
@@ -2545,6 +2577,7 @@ function App() {
   const proximityNotice = getMobileProximityPrompt(driver, home);
 
   function openHomeTab() {
+    loadRequestRef.current += 1;
     paperworkRequestRef.current?.abort();
     paperworkRequestRef.current = null;
     setIsPaperworkLoading(false);
